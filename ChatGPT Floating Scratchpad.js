@@ -107,13 +107,86 @@ function createEditor() {
         outline:"none",
         padding:"10px",
         fontFamily:"monospace",
-        fontSize:"13px"
+        fontSize:"13px",
+        tabSize:"4"
     });
 
     textarea.value=localStorage.getItem("tm_editor_content")||"";
 
     textarea.addEventListener("input",()=>{
         localStorage.setItem("tm_editor_content",textarea.value);
+    });
+
+    textarea.addEventListener("keydown",(e)=>{
+
+        const val=textarea.value;
+        const cur=textarea.selectionStart;
+        const sel=textarea.selectionEnd;
+
+        /* Enter — auto-indent to match current line */
+
+        if(e.key==="Enter"&&!e.shiftKey&&!e.ctrlKey&&!e.altKey){
+
+            e.preventDefault();
+
+            const lineStart=val.lastIndexOf("\n",cur-1)+1;
+            const lineText=val.substring(lineStart,cur);
+            const indent=lineText.match(/^[ ]*/)[0];
+
+            const before=val.substring(0,cur);
+            const after=val.substring(sel);
+
+            textarea.value=before+"\n"+indent+after;
+
+            const newPos=cur+1+indent.length;
+            textarea.selectionStart=textarea.selectionEnd=newPos;
+
+            textarea.dispatchEvent(new Event("input"));
+            return;
+        }
+
+        /* Tab — insert 4 spaces */
+
+        if(e.key==="Tab"&&!e.shiftKey){
+
+            e.preventDefault();
+
+            const before=val.substring(0,cur);
+            const after=val.substring(sel);
+
+            textarea.value=before+"    "+after;
+            textarea.selectionStart=textarea.selectionEnd=cur+4;
+
+            textarea.dispatchEvent(new Event("input"));
+            return;
+        }
+
+        /* Shift+Tab — remove up to 4 leading spaces */
+
+        if(e.key==="Tab"&&e.shiftKey){
+
+            e.preventDefault();
+
+            const lineStart=val.lastIndexOf("\n",cur-1)+1;
+            const lineText=val.substring(lineStart);
+            const leadingSpaces=lineText.match(/^[ ]*/)[0].length;
+            const remove=Math.min(4,leadingSpaces);
+
+            if(remove>0){
+
+                const before=val.substring(0,lineStart);
+                const after=val.substring(lineStart+remove);
+
+                textarea.value=before+after;
+
+                const newPos=Math.max(lineStart,cur-remove);
+                textarea.selectionStart=textarea.selectionEnd=newPos;
+
+                textarea.dispatchEvent(new Event("input"));
+            }
+
+            return;
+        }
     });
 
     container.appendChild(header);
