@@ -536,6 +536,82 @@ async function sendPromptToChatGPT(prompt){
     return await waitForAssistantResponse(previousCount);
 }
 
+/* ------------------------------- */
+/* Response Cleaning */
+/* ------------------------------- */
+
+function extractCleanText(messageEl){
+
+    const clone=messageEl.cloneNode(true);
+
+    /* Remove sticky code-block header bars (language label + copy button) */
+
+    clone.querySelectorAll("pre div.sticky").forEach(el=>el.remove());
+
+    /* Remove copy buttons by aria-label */
+
+    clone.querySelectorAll('button[aria-label="Copy"]').forEach(el=>el.remove());
+
+    /* Also remove any remaining copy buttons by text content */
+
+    clone.querySelectorAll("button").forEach(btn=>{
+
+        const text=btn.textContent.trim().toLowerCase();
+
+        if(text==="copy code"||text==="copy"||text==="copied!"){
+            btn.remove();
+        }
+    });
+
+    /*
+        Code blocks use CodeMirror (cm-content) with <br> for line breaks.
+        innerText can lose these breaks, so we extract code blocks separately,
+        replace them with a placeholder, then stitch the result back together.
+    */
+
+    const codeBlocks=clone.querySelectorAll(".cm-content");
+    const codePlaceholders=[];
+
+    codeBlocks.forEach(cm=>{
+
+        const lines=[];
+        let currentLine="";
+
+        cm.childNodes.forEach(node=>{
+
+            if(node.nodeName==="BR"){
+                lines.push(currentLine);
+                currentLine="";
+            }
+            else{
+                currentLine+=node.textContent;
+            }
+        });
+
+        if(currentLine) lines.push(currentLine);
+
+        const codeText=lines.join("\n");
+        const placeholder="__CODE_BLOCK_"+codePlaceholders.length+"__";
+        codePlaceholders.push(codeText);
+
+        cm.textContent=placeholder;
+    });
+
+    let result=clone.innerText.trim();
+
+    /* Restore code blocks from placeholders */
+
+    codePlaceholders.forEach((code,i)=>{
+        result=result.replace("__CODE_BLOCK_"+i+"__",code);
+    });
+
+    /* Strip markdown-style code fences that may remain */
+
+    result=result.replace(/^```[\w]*\n?/gm,"").replace(/^```\s*$/gm,"");
+
+    return result.trim();
+}
+
 const STOP_BTN_SELECTOR=[
     'button[data-testid="stop-button"]',
     'button[aria-label="Stop streaming"]',
@@ -598,7 +674,7 @@ function waitForAssistantResponse(previousCount){
                         );
 
                         const last=finalMessages[finalMessages.length-1];
-                        resolve(last?last.innerText.trim():"");
+                        resolve(last?extractCleanText(last):"");
 
                     },500);
                 }

@@ -1,0 +1,7 @@
+# Ignore everything
+*
+
+# Allow these files
+!.gitignore
+!README.md
+!ChatGPT Floating Scratchpad.js
