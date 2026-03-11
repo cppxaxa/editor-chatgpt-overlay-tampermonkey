@@ -23,6 +23,11 @@ let windowMode = "normal";
 let previousBounds = null;
 let waitAbortController = null;
 
+let columnContainer;  // flex wrapper for the two column textareas
+let leftTA;           // left textarea
+let rightTA;          // right textarea
+let syncing = false;  // guard against recursive input during redistribution
+
 /* ------------------------------- */
 /* Editor Creation */
 /* ------------------------------- */
@@ -108,6 +113,7 @@ function createEditor() {
         padding:"10px",
         fontFamily:"monospace",
         fontSize:"13px",
+        lineHeight:"18px",
         tabSize:"4"
     });
 
@@ -117,80 +123,119 @@ function createEditor() {
         localStorage.setItem("tm_editor_content",textarea.value);
     });
 
-    textarea.addEventListener("keydown",(e)=>{
-
-        const val=textarea.value;
-        const cur=textarea.selectionStart;
-        const sel=textarea.selectionEnd;
-
-        /* Enter — auto-indent to match current line */
-
-        if(e.key==="Enter"&&!e.shiftKey&&!e.ctrlKey&&!e.altKey){
-
-            e.preventDefault();
-
-            const lineStart=val.lastIndexOf("\n",cur-1)+1;
-            const lineText=val.substring(lineStart,cur);
-            const indent=lineText.match(/^[ ]*/)[0];
-
-            const before=val.substring(0,cur);
-            const after=val.substring(sel);
-
-            textarea.value=before+"\n"+indent+after;
-
-            const newPos=cur+1+indent.length;
-            textarea.selectionStart=textarea.selectionEnd=newPos;
-
-            textarea.dispatchEvent(new Event("input"));
-            return;
-        }
-
-        /* Tab — insert 4 spaces */
-
-        if(e.key==="Tab"&&!e.shiftKey){
-
-            e.preventDefault();
-
-            const before=val.substring(0,cur);
-            const after=val.substring(sel);
-
-            textarea.value=before+"    "+after;
-            textarea.selectionStart=textarea.selectionEnd=cur+4;
-
-            textarea.dispatchEvent(new Event("input"));
-            return;
-        }
-
-        /* Shift+Tab — remove up to 4 leading spaces */
-
-        if(e.key==="Tab"&&e.shiftKey){
-
-            e.preventDefault();
-
-            const lineStart=val.lastIndexOf("\n",cur-1)+1;
-            const lineText=val.substring(lineStart);
-            const leadingSpaces=lineText.match(/^[ ]*/)[0].length;
-            const remove=Math.min(4,leadingSpaces);
-
-            if(remove>0){
-
-                const before=val.substring(0,lineStart);
-                const after=val.substring(lineStart+remove);
-
-                textarea.value=before+after;
-
-                const newPos=Math.max(lineStart,cur-remove);
-                textarea.selectionStart=textarea.selectionEnd=newPos;
-
-                textarea.dispatchEvent(new Event("input"));
-            }
-
-            return;
-        }
-    });
+    attachEditorKeydown(textarea);
 
     container.appendChild(header);
     container.appendChild(textarea);
+
+    /* Column layout for maximized mode */
+
+    columnContainer = document.createElement("div");
+
+    Object.assign(columnContainer.style,{
+        display:"none",
+        flex:"1",
+        flexDirection:"row",
+        gap:"0px",
+        overflow:"hidden"
+    });
+
+    leftTA = document.createElement("textarea");
+    rightTA = document.createElement("textarea");
+
+    [leftTA, rightTA].forEach(col=>{
+
+        col.spellcheck=false;
+        col.setAttribute("autocomplete","off");
+        col.setAttribute("autocorrect","off");
+        col.setAttribute("autocapitalize","off");
+
+        Object.assign(col.style,{
+            flex:"1",
+            resize:"none",
+            margin:"0",
+            padding:"10px",
+            fontFamily:"monospace",
+            fontSize:"13px",
+            color:"#d4d4d4",
+            background:"#1e1e1e",
+            border:"none",
+            outline:"none",
+            tabSize:"4",
+            lineHeight:"18px"
+        });
+
+        attachEditorKeydown(col);
+
+        col.addEventListener("input",()=>{
+            if(syncing) return;
+            redistributeColumns();
+        });
+    });
+
+    leftTA.style.borderRight="1px solid #333";
+
+    /* Boundary navigation between columns */
+
+    leftTA.addEventListener("keydown",(e)=>{
+
+        if(windowMode!=="maximized") return;
+
+        /* ArrowDown on last line → jump to right textarea */
+        if(e.key==="ArrowDown"){
+            const val=leftTA.value;
+            const cur=leftTA.selectionStart;
+            const after=val.substring(cur);
+            if(after.indexOf("\n")===-1){
+                e.preventDefault();
+                rightTA.focus();
+                rightTA.selectionStart=rightTA.selectionEnd=0;
+            }
+        }
+    });
+
+    rightTA.addEventListener("keydown",(e)=>{
+
+        if(windowMode!=="maximized") return;
+        const cur=rightTA.selectionStart;
+
+        /* ArrowUp on first line → jump to left textarea */
+        if(e.key==="ArrowUp"){
+            const before=rightTA.value.substring(0,cur);
+            if(before.indexOf("\n")===-1){
+                e.preventDefault();
+                leftTA.focus();
+                leftTA.selectionStart=leftTA.selectionEnd=leftTA.value.length;
+            }
+        }
+
+        /* Backspace at position 0 → pull last line from left */
+        if(e.key==="Backspace" && cur===0 && rightTA.selectionEnd===0){
+            e.preventDefault();
+            const leftVal=leftTA.value;
+            const lastNewline=leftVal.lastIndexOf("\n");
+            if(lastNewline!==-1){
+                /* Remove last newline from left, prepend that trailing text to right */
+                const movedText=leftVal.substring(lastNewline+1);
+                leftTA.value=leftVal.substring(0,lastNewline);
+                rightTA.value=movedText+rightTA.value;
+                rightTA.focus();
+                rightTA.selectionStart=rightTA.selectionEnd=movedText.length;
+            } else {
+                /* Left has only one line — merge everything into left */
+                leftTA.value=leftVal+rightTA.value;
+                rightTA.value="";
+                leftTA.focus();
+                leftTA.selectionStart=leftTA.selectionEnd=leftVal.length;
+            }
+            saveMergedContent();
+            redistributeColumns();
+        }
+    });
+
+    columnContainer.appendChild(leftTA);
+    columnContainer.appendChild(rightTA);
+    container.appendChild(columnContainer);
 
     createResizeHandle();
 
@@ -211,9 +256,15 @@ function createEditor() {
         }
         else{
 
+            /* If minimizing from maximized, tear down column layout first */
+            if(windowMode==="maximized"){
+                exitMaximizedColumnLayout();
+            }
+
             previousBounds={height:container.style.height};
 
             textarea.style.display="none";
+            columnContainer.style.display="none";
             resizeHandle.style.display="none";
             container.style.height="36px";
 
@@ -239,12 +290,14 @@ function createEditor() {
             container.style.width="100vw";
             container.style.height="100vh";
 
-            textarea.style.display="block";
             resizeHandle.style.display="none";
 
             windowMode="maximized";
+            enterMaximizedColumnLayout();
         }
         else{
+
+            exitMaximizedColumnLayout();
 
             if(previousBounds){
 
@@ -264,6 +317,165 @@ function createEditor() {
     closeBtn.onclick=()=>container.style.display="none";
 
     makeDraggable(container,header);
+}
+
+/* ------------------------------- */
+/* Editor Keydown (shared)         */
+/* ------------------------------- */
+
+function attachEditorKeydown(ta){
+
+    ta.addEventListener("keydown",(e)=>{
+
+        const val=ta.value;
+        const cur=ta.selectionStart;
+        const sel=ta.selectionEnd;
+
+        /* Enter — auto-indent to match current line */
+
+        if(e.key==="Enter"&&!e.shiftKey&&!e.ctrlKey&&!e.altKey){
+
+            e.preventDefault();
+
+            const lineStart=val.lastIndexOf("\n",cur-1)+1;
+            const lineText=val.substring(lineStart,cur);
+            const indent=lineText.match(/^[ ]*/)[0];
+
+            const before=val.substring(0,cur);
+            const after=val.substring(sel);
+
+            ta.value=before+"\n"+indent+after;
+
+            const newPos=cur+1+indent.length;
+            ta.selectionStart=ta.selectionEnd=newPos;
+
+            ta.dispatchEvent(new Event("input"));
+            return;
+        }
+
+        /* Tab — insert 4 spaces */
+
+        if(e.key==="Tab"&&!e.shiftKey){
+
+            e.preventDefault();
+
+            const before=val.substring(0,cur);
+            const after=val.substring(sel);
+
+            ta.value=before+"    "+after;
+            ta.selectionStart=ta.selectionEnd=cur+4;
+
+            ta.dispatchEvent(new Event("input"));
+            return;
+        }
+
+        /* Shift+Tab — remove up to 4 leading spaces */
+
+        if(e.key==="Tab"&&e.shiftKey){
+
+            e.preventDefault();
+
+            const lineStart=val.lastIndexOf("\n",cur-1)+1;
+            const lineText=val.substring(lineStart);
+            const leadingSpaces=lineText.match(/^[ ]*/)[0].length;
+            const remove=Math.min(4,leadingSpaces);
+
+            if(remove>0){
+
+                const before=val.substring(0,lineStart);
+                const after=val.substring(lineStart+remove);
+
+                ta.value=before+after;
+
+                const newPos=Math.max(lineStart,cur-remove);
+                ta.selectionStart=ta.selectionEnd=newPos;
+
+                ta.dispatchEvent(new Event("input"));
+            }
+
+            return;
+        }
+    });
+}
+
+/* ------------------------------- */
+/* Column Layout (maximized)       */
+/* ------------------------------- */
+
+function getLinesPerCol(){
+
+    const containerH=container.offsetHeight - headerEl.offsetHeight;
+    return Math.max(1, Math.floor((containerH - 20) / 18));
+}
+
+function mergeColumnContent(){
+
+    if(!rightTA.value) return leftTA.value;
+    return leftTA.value+"\n"+rightTA.value;
+}
+
+function saveMergedContent(){
+
+    const merged=mergeColumnContent();
+    textarea.value=merged;
+    localStorage.setItem("tm_editor_content",merged);
+}
+
+function redistributeColumns(){
+
+    if(syncing) return;
+    syncing=true;
+
+    const focused=document.activeElement;
+    const focusedIsLeft=(focused===leftTA);
+    const focusedIsRight=(focused===rightTA);
+    const savedCursor=focused? focused.selectionStart : 0;
+    const savedSelEnd=focused? focused.selectionEnd : 0;
+
+    const all=mergeColumnContent();
+    const lines=all.split("\n");
+    const lpc=getLinesPerCol();
+
+    const leftText=lines.slice(0,lpc).join("\n");
+    const rightText=lines.slice(lpc).join("\n");
+
+    if(leftTA.value!==leftText) leftTA.value=leftText;
+    if(rightTA.value!==rightText) rightTA.value=rightText;
+
+    /* Restore cursor */
+    if(focusedIsLeft){
+        leftTA.selectionStart=Math.min(savedCursor,leftTA.value.length);
+        leftTA.selectionEnd=Math.min(savedSelEnd,leftTA.value.length);
+    } else if(focusedIsRight){
+        rightTA.selectionStart=Math.min(savedCursor,rightTA.value.length);
+        rightTA.selectionEnd=Math.min(savedSelEnd,rightTA.value.length);
+    }
+
+    saveMergedContent();
+    syncing=false;
+}
+
+function enterMaximizedColumnLayout(){
+
+    textarea.style.display="none";
+
+    const lines=textarea.value.split("\n");
+    const lpc=getLinesPerCol();
+
+    leftTA.value=lines.slice(0,lpc).join("\n");
+    rightTA.value=lines.slice(lpc).join("\n");
+
+    columnContainer.style.display="flex";
+    leftTA.focus();
+}
+
+function exitMaximizedColumnLayout(){
+
+    textarea.value=mergeColumnContent();
+    localStorage.setItem("tm_editor_content",textarea.value);
+
+    columnContainer.style.display="none";
+    textarea.style.display="block";
 }
 
 /* ------------------------------- */
@@ -434,10 +646,16 @@ function registerLineReaderHotkey(){
 async function handleLineAction(){
 
     if(!textarea) return;
-    if(document.activeElement!==textarea) return;
 
-    const cursor=textarea.selectionStart;
-    const text=textarea.value;
+    const activeTA=document.activeElement;
+    const isEditor=(activeTA===textarea||activeTA===leftTA||activeTA===rightTA);
+    if(!isEditor) return;
+
+    /* In maximized mode, work with the focused column textarea */
+    const ta=(windowMode==="maximized")? activeTA : textarea;
+
+    const cursor=ta.selectionStart;
+    const text=ta.value;
 
     const start=text.lastIndexOf("\n",cursor-1)+1;
     const end=text.indexOf("\n",cursor);
@@ -467,12 +685,14 @@ async function handleLineAction(){
                 .map(l=>indent+l)
                 .join("\n");
 
-            textarea.value=
+            ta.value=
                 text.substring(0,start)+
                 indented+
                 text.substring(lineEnd);
 
-            localStorage.setItem("tm_editor_content",textarea.value);
+            ta.dispatchEvent(new Event("input"));
+            localStorage.setItem("tm_editor_content",
+                windowMode==="maximized"? mergeColumnContent() : textarea.value);
         }
 
         return;
@@ -502,9 +722,15 @@ Here is the code:
 async function handleCodeCheck(){
 
     if(!textarea) return;
-    if(document.activeElement!==textarea) return;
 
-    const code=textarea.value.trim();
+    const activeTA=document.activeElement;
+    const isEditor=(activeTA===textarea||activeTA===leftTA||activeTA===rightTA);
+    if(!isEditor) return;
+
+    /* In maximized mode, use merged content from both columns */
+    const code=windowMode==="maximized"
+        ? mergeColumnContent().trim()
+        : textarea.value.trim();
 
     if(!code){
         alert("Editor is empty — nothing to check.");
@@ -990,6 +1216,7 @@ function restoreEditorState(){
         container.style.height="100vh";
 
         resizeHandle.style.display="none";
+        enterMaximizedColumnLayout();
     }
 
     if(windowMode==="minimized"){
@@ -1009,6 +1236,10 @@ function restoreEditorState(){
 
 createLauncher();
 registerLineReaderHotkey();
+
+window.addEventListener("resize",()=>{
+    if(windowMode==="maximized") redistributeColumns();
+});
 
 const tmStyle=document.createElement("style");
 tmStyle.textContent=`@keyframes tm-spin{to{transform:rotate(360deg)}}`;
