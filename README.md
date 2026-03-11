@@ -27,6 +27,14 @@ A Tampermonkey userscript that adds a floating, resizable text editor overlay to
 4. Save the script (<kbd>Ctrl</kbd>+<kbd>S</kbd>)
 5. Navigate to [chatgpt.com](https://chatgpt.com) — you'll see a small **"E"** button in the bottom-left corner
 
+## Quickstart
+
+1. Click the **"E"** button to open the editor
+2. Type `/r write a fizzbuzz boilerplate in C#` and press <kbd>Alt</kbd>+<kbd>I</kbd> — the line is replaced with generated code
+3. Inside the function body, add a new line with proper indentation and type `/p fill the function`
+4. Press <kbd>Alt</kbd>+<kbd>I</kbd> — ChatGPT sees the full code context and fills in the implementation
+5. Press <kbd>Alt</kbd>+<kbd>C</kbd> — the code is reviewed, issues appear as ⭐ markers in the editor
+
 ## Usage
 
 ### Opening the Editor
