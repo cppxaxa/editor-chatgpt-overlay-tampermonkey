@@ -249,3 +249,7 @@ Contributions are welcome! Feel free to open issues or submit pull requests.
 ## License
 
 This project is open source. See the repository for license details.
+
+## Screenshot
+
+![ChatGPT Floating Scratchpad](imgs/casual-1.png)
