@@ -28,7 +28,7 @@ let leftTA;           // left textarea
 let rightTA;          // right textarea
 let syncing = false;  // guard against recursive input during redistribution
 
-const MARKER_CHAR = "\u26a0"; // ⚠ warning sign
+const MARKER_CHAR = "\u2B50"; // ⭐
 
 /* ------------------------------- */
 /* Editor Creation */
