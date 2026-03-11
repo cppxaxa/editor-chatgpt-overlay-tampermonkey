@@ -612,6 +612,10 @@ function createLauncher(){
         if(!container) createEditor();
 
         container.style.display="flex";
+
+        /* If restored as maximized, the initial split happened before the
+           container was visible (offsetHeight was 0). Re-split now. */
+        if(windowMode==="maximized") redistributeColumns();
     };
 
     document.body.appendChild(btn);
@@ -672,6 +676,8 @@ async function handleLineAction(){
 
         waitAbortController=new AbortController();
         showWaitingUI();
+
+        await yieldFrame(); /* let browser paint the spinner before proceeding */
 
         const response=await sendPromptToChatGPT(prompt);
 
@@ -739,6 +745,8 @@ async function handleCodeCheck(){
 
     waitAbortController=new AbortController();
     showWaitingUI();
+
+    await yieldFrame(); /* let browser paint the spinner before proceeding */
 
     const response=await sendPromptToChatGPT(CODE_CHECK_PROMPT+code);
 
@@ -964,6 +972,8 @@ function hideWaitingUI(){
 /* ------------------------------- */
 
 function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
+
+function yieldFrame(){return new Promise(r=>requestAnimationFrame(()=>setTimeout(r,0)));}
 
 async function insertTextIntoChatGPT(prompt){
 
