@@ -737,12 +737,46 @@ async function handleLineAction(){
 
         const prompt=trimmed.substring(3);
 
+        /* Build full editor content for context */
+        const fullContent=windowMode==="maximized"
+            ? mergeColumnContent()
+            : textarea.value;
+
+        const allLines=fullContent.split("\n");
+
+        /* Find which line the /p command is on (1-based).
+           In maximized mode, offset by the left textarea's line count if editing in right. */
+        let cmdLineIdx=text.substring(0,start).split("\n").length - 1;
+        if(windowMode==="maximized" && ta===rightTA){
+            cmdLineIdx+=leftTA.value.split("\n").length;
+        }
+        const cmdLineNum=cmdLineIdx+1;
+
+        const numberedContext=allLines.map((l,i)=>{
+            const num=i+1;
+            const prefix=num+"> ";
+            if(num===cmdLineNum) return prefix+l+"  ◄◄◄ COMMAND LINE";
+            return prefix+l;
+        }).join("\n");
+
+        const contextualPrompt=
+            `You are an inline code assistant. The user has a file open in their editor and has placed a command on line ${cmdLineNum}.
+
+The command is: ${prompt}
+
+Respond ONLY with the text that should replace the command line. No explanations, no markdown fences, no extra text. Your response will be pasted directly into the editor at line ${cmdLineNum}, replacing the command line. The response can be multiline.
+
+Here is the full editor content for context (line numbers are prefixed as "N> "):
+\`\`\`
+${numberedContext}
+\`\`\``;
+
         waitAbortController=new AbortController();
         showWaitingUI();
 
         await yieldFrame(); /* let browser paint the spinner before proceeding */
 
-        const response=await sendPromptToChatGPT(prompt);
+        const response=await sendPromptToChatGPT(contextualPrompt);
 
         hideWaitingUI();
         waitAbortController=null;
