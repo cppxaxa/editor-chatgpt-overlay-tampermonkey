@@ -787,7 +787,7 @@ async function handleLineAction(){
 
 The command is: ${prompt}
 
-Respond ONLY with the text that should replace the command line. No explanations, no markdown fences, no extra text. Your response will be pasted directly into the editor at line ${cmdLineNum}, replacing the command line. The response can be multiline.
+Respond ONLY with the text that should replace the command line. No explanations, no markdown fences, no extra text. Your response will be pasted directly into the editor at line ${cmdLineNum}, replacing the command line. The response can be multiline. If your response should have indentation, respond back with \`\`\` encapsulation.
 
 Here is the full editor content for context (line numbers are prefixed as "N> "):
 \`\`\`
