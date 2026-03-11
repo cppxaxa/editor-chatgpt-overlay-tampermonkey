@@ -18,8 +18,10 @@ let container;
 let textarea;
 let resizeHandle;
 
+let headerEl;
 let windowMode = "normal";
 let previousBounds = null;
+let waitAbortController = null;
 
 /* ------------------------------- */
 /* Editor Creation */
@@ -44,6 +46,7 @@ function createEditor() {
     });
 
     const header=document.createElement("div");
+    headerEl=header;
 
     Object.assign(header.style,{
         height:"36px",
@@ -367,7 +370,13 @@ async function handleLineAction(){
 
         const prompt=line.substring(3);
 
+        waitAbortController=new AbortController();
+        showWaitingUI();
+
         const response=await sendPromptToChatGPT(prompt);
+
+        hideWaitingUI();
+        waitAbortController=null;
 
         if(response){
 
@@ -383,6 +392,85 @@ async function handleLineAction(){
     }
 
     alert(line);
+}
+
+/* ------------------------------- */
+/* Waiting UI */
+/* ------------------------------- */
+
+function showWaitingUI(){
+
+    if(!headerEl) return;
+
+    while(headerEl.firstChild){
+        if(headerEl.firstChild===headerEl.querySelector("div")) break;
+        headerEl.removeChild(headerEl.firstChild);
+    }
+
+    const indicator=document.createElement("span");
+    indicator.className="tm-wait-indicator";
+
+    const spinner=document.createElement("span");
+    spinner.textContent="⟳";
+
+    Object.assign(spinner.style,{
+        display:"inline-block",
+        animation:"tm-spin 1s linear infinite",
+        marginRight:"6px",
+        fontSize:"14px"
+    });
+
+    const label=document.createElement("span");
+    label.textContent="Waiting...";
+
+    indicator.appendChild(spinner);
+    indicator.appendChild(label);
+
+    const cancelBtn=document.createElement("button");
+    cancelBtn.className="tm-cancel-btn";
+    cancelBtn.textContent="Cancel";
+
+    Object.assign(cancelBtn.style,{
+        marginLeft:"10px",
+        background:"#c0392b",
+        color:"white",
+        border:"none",
+        borderRadius:"4px",
+        padding:"2px 8px",
+        cursor:"pointer",
+        fontSize:"11px"
+    });
+
+    cancelBtn.onclick=(e)=>{
+        e.stopPropagation();
+        if(waitAbortController) waitAbortController.abort();
+    };
+
+    headerEl.insertBefore(indicator,headerEl.firstChild);
+    headerEl.insertBefore(cancelBtn,headerEl.querySelector("div"));
+}
+
+function hideWaitingUI(){
+
+    if(!headerEl) return;
+
+    const indicator=headerEl.querySelector(".tm-wait-indicator");
+    if(indicator) indicator.remove();
+
+    const cancelBtn=headerEl.querySelector(".tm-cancel-btn");
+    if(cancelBtn) cancelBtn.remove();
+
+    const existing=headerEl.firstChild;
+    if(!existing||existing.nodeType!==Node.TEXT_NODE||existing.textContent!=="Editor"){
+
+        const textNode=document.createTextNode("Editor");
+
+        if(headerEl.firstChild){
+            headerEl.insertBefore(textNode,headerEl.firstChild);
+        }else{
+            headerEl.appendChild(textNode);
+        }
+    }
 }
 
 /* ------------------------------- */
@@ -428,6 +516,10 @@ async function waitForSendButton(){
 
 async function sendPromptToChatGPT(prompt){
 
+    const previousCount=document.querySelectorAll(
+        '[data-message-author-role="assistant"]'
+    ).length;
+
     const ok=await insertTextIntoChatGPT(prompt);
 
     if(!ok) return null;
@@ -441,37 +533,80 @@ async function sendPromptToChatGPT(prompt){
 
     sendButton.click();
 
-    return await waitForAssistantResponse();
+    return await waitForAssistantResponse(previousCount);
 }
 
-function waitForAssistantResponse(){
+const STOP_BTN_SELECTOR=[
+    'button[data-testid="stop-button"]',
+    'button[aria-label="Stop streaming"]',
+    'button[aria-label="Stop generating"]',
+    'button[aria-label="Stop"]'
+].join(",");
+
+function waitForAssistantResponse(previousCount){
+
+    const signal=waitAbortController?waitAbortController.signal:null;
 
     return new Promise(resolve=>{
 
-        let lastLength=0;
+        let phase=1;
 
         const interval=setInterval(()=>{
+
+            if(signal&&signal.aborted){
+                clearInterval(interval);
+                resolve(null);
+                return;
+            }
 
             const messages=document.querySelectorAll(
                 '[data-message-author-role="assistant"]'
             );
 
-            if(!messages.length) return;
+            /* Phase 1: wait for a NEW assistant message */
 
-            const last=messages[messages.length-1];
-            const text=last.innerText.trim();
+            if(phase===1){
 
-            if(!text) return;
+                if(messages.length>previousCount){
+                    phase=2;
+                }
 
-            if(text.length===lastLength){
-
-                clearInterval(interval);
-                resolve(text);
+                return;
             }
 
-            lastLength=text.length;
+            /* Phase 2: wait for the stop button to disappear */
 
-        },1000);
+            if(phase===2){
+
+                const stopBtn=document.querySelector(STOP_BTN_SELECTOR);
+
+                if(!stopBtn){
+                    phase=3;
+
+                    setTimeout(()=>{
+
+                        if(signal&&signal.aborted){
+                            clearInterval(interval);
+                            resolve(null);
+                            return;
+                        }
+
+                        clearInterval(interval);
+
+                        const finalMessages=document.querySelectorAll(
+                            '[data-message-author-role="assistant"]'
+                        );
+
+                        const last=finalMessages[finalMessages.length-1];
+                        resolve(last?last.innerText.trim():"");
+
+                    },500);
+                }
+
+                return;
+            }
+
+        },500);
     });
 }
 
@@ -538,5 +673,9 @@ function restoreEditorState(){
 
 createLauncher();
 registerLineReaderHotkey();
+
+const tmStyle=document.createElement("style");
+tmStyle.textContent=`@keyframes tm-spin{to{transform:rotate(360deg)}}`;
+document.head.appendChild(tmStyle);
 
 })();
