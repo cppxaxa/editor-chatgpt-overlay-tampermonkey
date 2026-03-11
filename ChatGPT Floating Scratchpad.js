@@ -28,6 +28,8 @@ let leftTA;           // left textarea
 let rightTA;          // right textarea
 let syncing = false;  // guard against recursive input during redistribution
 
+const MARKER_CHAR = "\u26a0"; // ⚠ warning sign
+
 /* ------------------------------- */
 /* Editor Creation */
 /* ------------------------------- */
@@ -324,6 +326,19 @@ function createEditor() {
 /* ------------------------------- */
 
 function attachEditorKeydown(ta){
+
+    /* Remove ⚠ markers when cursor touches them via keyboard */
+    ta.addEventListener("keyup",(e)=>{
+
+        if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight","Home","End"].includes(e.key)){
+            removeMarkerAtCursor(ta);
+        }
+    });
+
+    /* Remove ⚠ markers when cursor touches them via click */
+    ta.addEventListener("mouseup",()=>{
+        removeMarkerAtCursor(ta);
+    });
 
     ta.addEventListener("keydown",(e)=>{
 
@@ -718,12 +733,93 @@ const CODE_CHECK_PROMPT=`Review the following code. Respond ONLY with a JSON obj
   "solves_problem": true or false,
   "summary": "one-line description of what the code does",
   "issues": ["issue 1", "issue 2"] or [] if none,
-  "suggestions": ["suggestion 1"] or [] if none
+  "suggestions": ["suggestion 1"] or [] if none,
+  "markers": [{"line": 1, "fixed": "corrected line content", "issue": "short reason"}] or [] if none
 }
 
-Here is the code:
+markers: for each issue you can pinpoint to a specific line, include:
+- "line": the 1-based line number (use the "N> " prefix numbers shown below)
+- "fixed": the corrected version of that line (just the code, without the "N> " prefix). Make minimal changes — only fix what is wrong.
+- "issue": a short description of the problem
 
+Each line in the code below is prefixed with its line number as "N> " (e.g. "1> ", "2> "). Use these numbers directly for the "line" field. The "fixed" field must NOT include the line number prefix.
+
+Here is the code:
+\`\`\`
 `;
+
+function insertMarkers(ta, markers){
+
+    if(!markers||!markers.length) return;
+
+    const valid=markers.filter(m=>m.line && typeof m.fixed==="string");
+    if(!valid.length) return;
+
+    const lines=ta.value.split("\n");
+
+    valid.forEach(m=>{
+
+        const lineIdx=m.line-1; // 1-based → 0-based
+        if(lineIdx<0||lineIdx>=lines.length) return;
+
+        const original=lines[lineIdx];
+        const fixed=m.fixed;
+
+        /* Strip leading whitespace from both before comparing,
+           since ChatGPT often returns the fixed line without indentation */
+        const origTrimmed=original.replace(/^[ \t]*/,"");
+        const fixedTrimmed=fixed.replace(/^[ \t]*/,"");
+        const indent=original.length - origTrimmed.length;
+
+        /* Find the first position where the trimmed lines differ */
+        let diffPos=0;
+        while(diffPos<origTrimmed.length && diffPos<fixedTrimmed.length && origTrimmed[diffPos]===fixedTrimmed[diffPos]){
+            diffPos++;
+        }
+
+        /* If they're identical, no marker needed */
+        if(diffPos===origTrimmed.length && diffPos===fixedTrimmed.length) return;
+
+        /* Insert ⚠ at the first difference, offset by the original indentation */
+        const insertAt=indent+diffPos;
+        lines[lineIdx]=original.substring(0,insertAt)+MARKER_CHAR+original.substring(insertAt);
+    });
+
+    ta.value=lines.join("\n");
+    ta.dispatchEvent(new Event("input"));
+}
+
+function removeMarkerAtCursor(ta){
+
+    const val=ta.value;
+    const cur=ta.selectionStart;
+
+    /* Check character at cursor and character before cursor */
+    if(val[cur]===MARKER_CHAR){
+        ta.value=val.substring(0,cur)+val.substring(cur+1);
+        ta.selectionStart=ta.selectionEnd=cur;
+        ta.dispatchEvent(new Event("input"));
+        return true;
+    }
+
+    if(cur>0 && val[cur-1]===MARKER_CHAR){
+        ta.value=val.substring(0,cur-1)+val.substring(cur);
+        ta.selectionStart=ta.selectionEnd=cur-1;
+        ta.dispatchEvent(new Event("input"));
+        return true;
+    }
+
+    return false;
+}
+
+function clearAllMarkers(ta){
+
+    if(ta.value.indexOf(MARKER_CHAR)===-1) return;
+    const cur=ta.selectionStart;
+    ta.value=ta.value.split(MARKER_CHAR).join("");
+    ta.selectionStart=ta.selectionEnd=Math.min(cur,ta.value.length);
+    ta.dispatchEvent(new Event("input"));
+}
 
 async function handleCodeCheck(){
 
@@ -734,6 +830,15 @@ async function handleCodeCheck(){
     if(!isEditor) return;
 
     /* In maximized mode, use merged content from both columns */
+    /* Clear old markers first so they don't pollute the prompt */
+    if(windowMode==="maximized"){
+        clearAllMarkers(leftTA);
+        clearAllMarkers(rightTA);
+        redistributeColumns();
+    } else {
+        clearAllMarkers(textarea);
+    }
+
     const code=windowMode==="maximized"
         ? mergeColumnContent().trim()
         : textarea.value.trim();
@@ -748,7 +853,9 @@ async function handleCodeCheck(){
 
     await yieldFrame(); /* let browser paint the spinner before proceeding */
 
-    const response=await sendPromptToChatGPT(CODE_CHECK_PROMPT+code);
+    const numberedCode=code.split("\n").map((line,i)=>(i+1)+"> "+line).join("\n");
+
+    const response=await sendPromptToChatGPT(CODE_CHECK_PROMPT+numberedCode+"\n```");
 
     hideWaitingUI();
     waitAbortController=null;
@@ -793,6 +900,23 @@ async function handleCodeCheck(){
         "Suggestions:\n"+suggestionList;
 
     showResultDialog("Code Check Result",body);
+
+    /* Insert ⚠ markers at issue locations */
+    if(parsed.markers&&parsed.markers.length){
+
+        if(windowMode==="maximized"){
+            /* Merge into main textarea, insert markers, then re-split */
+            textarea.value=mergeColumnContent();
+            insertMarkers(textarea, parsed.markers);
+            const lines=textarea.value.split("\n");
+            const lpc=getLinesPerCol();
+            leftTA.value=lines.slice(0,lpc).join("\n");
+            rightTA.value=lines.slice(lpc).join("\n");
+            saveMergedContent();
+        } else {
+            insertMarkers(textarea, parsed.markers);
+        }
+    }
 }
 
 /* ------------------------------- */
