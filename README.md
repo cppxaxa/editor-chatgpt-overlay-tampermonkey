@@ -1,6 +1,6 @@
 # ChatGPT Floating Scratchpad
 
-A Tampermonkey userscript that adds a floating, resizable text editor overlay to [ChatGPT](https://chatgpt.com) with built-in prompt automation.
+A Tampermonkey userscript that adds a floating, resizable text editor overlay to [ChatGPT](https://chatgpt.com) with built-in prompt automation and code review.
 
 ![Tampermonkey](https://img.shields.io/badge/Tampermonkey-Userscript-green)
 ![JavaScript](https://img.shields.io/badge/JavaScript-Vanilla-yellow)
@@ -11,10 +11,12 @@ A Tampermonkey userscript that adds a floating, resizable text editor overlay to
 - **Floating Editor** — A draggable, resizable scratchpad that sits on top of ChatGPT
 - **Dark Theme** — Matches ChatGPT's aesthetic with a monospace code-friendly font
 - **Window Controls** — Minimize, maximize, and close buttons just like a real window
-- **Persistent State** — Editor content, position, and size are saved across page reloads
-- **ChatGPT Prompt Automation** — Send prompts to ChatGPT directly from the editor and capture responses inline
-- **Code Check** — Review your code for correctness via ChatGPT with a single shortcut
+- **Two-Column Layout** — When maximized, text flows into two side-by-side editable columns to use widescreen space
+- **Persistent State** — Editor content, position, size, and window mode are saved across page reloads
+- **Inline Commands** — `/p` (contextual prompt) and `/r` (raw prompt) commands to interact with ChatGPT directly from the editor
+- **Code Check with Markers** — Review your code via ChatGPT; issues are marked with ⭐ at the exact position in the editor
 - **Smart Indentation** — Auto-indent on Enter, Tab inserts 4 spaces, Shift+Tab removes indentation
+- **Title Bar Buttons** — "Command" and "Check" buttons in the header for mouse-driven access
 - **Waiting UI** — Spinner and cancel button in the titlebar while waiting for ChatGPT responses
 
 ## Installation
@@ -36,66 +38,113 @@ Click the **"E"** launcher button at the bottom-left of the ChatGPT page. The fl
 | Button | Action |
 |--------|--------|
 | **—** (Minimize) | Collapses the editor to just its title bar. Click again to restore. |
-| **□** (Maximize) | Expands the editor to fill the entire screen. Click again to restore. |
+| **□** (Maximize) | Expands the editor to fill the entire screen with a two-column layout. Click again to restore. |
 | **×** (Close) | Hides the editor. Click the "E" launcher to reopen. |
 
 You can also **drag** the title bar to reposition the window, and **drag the bottom-right corner** to resize it.
 
+### Two-Column Layout (Maximized)
+
+When maximized, the editor splits into two side-by-side textareas:
+
+- The **left column** holds as many lines as fit vertically
+- **Overflow lines** appear in the **right column**
+- Both columns are fully editable — click, type, select, copy/paste all work naturally
+- Arrow keys cross between columns seamlessly (Down at bottom of left jumps to top of right, and vice versa)
+- Backspace at the start of the right column pulls content from the left
+- Lines redistribute automatically as you type or resize the window
+
 ---
 
-### `/p` — Prompt Command
+### `/p` — Contextual Prompt Command
 
-The `/p` command lets you send a prompt to ChatGPT directly from the editor and replace the line with the response.
+The `/p` command sends a prompt to ChatGPT **with full editor context** and replaces the command line with the response.
 
 **How to use:**
 
 1. In the editor, type a line starting with `/p ` followed by your prompt:
    ```
-   /p What is the capital of France?
+   /p write a function that adds two numbers
    ```
 2. Place your cursor on that line
-3. Press <kbd>Alt</kbd>+<kbd>I</kbd> to execute
+3. Press <kbd>Alt</kbd>+<kbd>I</kbd> or click the **Command** button in the title bar
 
 **What happens:**
-- The text after `/p ` is sent to ChatGPT as a prompt
-- The script waits for ChatGPT to finish generating its response
-- The entire `/p ...` line is replaced with ChatGPT's response directly in the editor
+- The entire editor content is sent to ChatGPT as context, with line numbers and the `/p` line marked
+- ChatGPT is instructed to respond with only the replacement text — no explanations, no fences
+- The `/p ...` line is replaced with the response, preserving indentation
+- The response can be multiline
 
-This lets you build up notes, Q&A pairs, or chain prompts without ever leaving the scratchpad.
+**Example — building code inline:**
+```
+public class Calculator {
+    /p write a method that divides two numbers with error handling
+}
+```
+ChatGPT sees the full class context and generates a method that fits naturally.
+
+---
+
+### `/r` — Raw Prompt Command
+
+The `/r` command sends a prompt to ChatGPT **without any context or instructions** — just the raw text.
+
+**How to use:**
+
+1. Type a line starting with `/r ` followed by your prompt:
+   ```
+   /r What is the capital of France?
+   ```
+2. Place your cursor on that line
+3. Press <kbd>Alt</kbd>+<kbd>I</kbd> or click the **Command** button
+
+**What happens:**
+- Only the text after `/r ` is sent to ChatGPT as-is — no editor context, no system instructions
+- The `/r ...` line is replaced with ChatGPT's full response
+
+Use `/r` when you want a general-purpose question answered without the editor content influencing the response.
 
 ---
 
 ### <kbd>Alt</kbd>+<kbd>I</kbd> — Execute Current Line
 
-<kbd>Alt</kbd>+<kbd>I</kbd> is the keyboard shortcut that triggers the action for the current line under the cursor.
+<kbd>Alt</kbd>+<kbd>I</kbd> triggers the action for the current line under the cursor.
 
 **Behavior:**
-- **If the line starts with `/p `** — the prompt is sent to ChatGPT and the line is replaced with the response (see above)
-- **If the line is regular text** — the line content is shown in an alert popup (useful for quick previewing)
+- **`/p ` line** — contextual prompt sent to ChatGPT, line replaced with response
+- **`/r ` line** — raw prompt sent to ChatGPT, line replaced with response
+- **Regular text** — line content is shown in an alert popup
 
-> **Note:** The editor textarea must be focused for <kbd>Alt</kbd>+<kbd>I</kbd> to work.
+> **Tip:** You can also click the **Command** button in the title bar instead of using the keyboard shortcut.
 
 ---
 
 ### <kbd>Alt</kbd>+<kbd>C</kbd> — Code Check
 
-<kbd>Alt</kbd>+<kbd>C</kbd> sends the entire editor content to ChatGPT for a code review and displays the result in a dialog.
+<kbd>Alt</kbd>+<kbd>C</kbd> sends the entire editor content to ChatGPT for a code review. Issues are displayed in a dialog **and** marked directly in the editor with ⭐.
 
 **How to use:**
 
 1. Write or paste your code into the editor
-2. Press <kbd>Alt</kbd>+<kbd>C</kbd> while the editor is focused
+2. Press <kbd>Alt</kbd>+<kbd>C</kbd> or click the **Check** button in the title bar
 
 **What happens:**
-- The editor content is sent to ChatGPT with a prompt requesting a structured JSON review
-- The titlebar shows a ⟳ spinner and a **Cancel** button while waiting (Cancel stops the editor's wait only — ChatGPT continues independently)
-- ChatGPT responds with a JSON object containing:
+- The code is sent with line numbers (`1> `, `2> `, etc.) so ChatGPT can pinpoint issues
+- The titlebar shows a spinner and a **Cancel** button while waiting
+- ChatGPT responds with a structured review:
   - **correct** — whether the code is syntactically and logically correct
-  - **solves_problem** — whether the code solves the problem it appears to be targeting
-  - **summary** — a one-line description of what the code does
-  - **issues** — a list of problems found (empty if none)
-  - **suggestions** — improvement recommendations (empty if none)
-- The JSON is parsed and displayed in a formatted dialog:
+  - **solves_problem** — whether the code solves its intended problem
+  - **summary** — a one-line description
+  - **issues** — list of problems found
+  - **suggestions** — improvement recommendations
+  - **markers** — issue locations with corrected line content
+- The result is displayed in a formatted dialog
+- ⭐ markers are inserted into the editor at the exact position of each issue (by diffing the original line against ChatGPT's corrected version)
+
+**Marker behavior:**
+- ⭐ markers appear inline in the code right where the issue is
+- **Click on a marker** or **move the cursor to it** (arrow keys) to dismiss it
+- Old markers are automatically cleared before each new code check
 
 ```
 Correct: ✅ Yes
@@ -115,29 +164,50 @@ Suggestions:
 
 ---
 
+### Title Bar Buttons
+
+Two action buttons sit beside the "Editor" label in the title bar:
+
+| Button | Action |
+|--------|--------|
+| **Command** | Executes the current line — same as <kbd>Alt</kbd>+<kbd>I</kbd> |
+| **Check** | Runs code check — same as <kbd>Alt</kbd>+<kbd>C</kbd> |
+
+These work even after clicking away from the textarea — the editor remembers which textarea was last focused.
+
+---
+
 ### Example Workflow
 
 ```
-/p Summarize the key differences between TCP and UDP
-/p Write a Python function to check if a string is a palindrome
-/p Explain the CAP theorem in simple terms
+/p Write a C# class for a binary search tree with insert and search methods
 ```
 
-Place your cursor on any line and press <kbd>Alt</kbd>+<kbd>I</kbd>. The `/p ...` line will be replaced with ChatGPT's full response. You can then continue editing, add follow-up prompts, and build a working document.
+Press <kbd>Alt</kbd>+<kbd>I</kbd> — the `/p` line is replaced with a full BST implementation.
+
+Then press <kbd>Alt</kbd>+<kbd>C</kbd> to review the generated code. Any issues appear as ⭐ markers in the code and a summary dialog.
+
+Fix the issues, then add more prompts inline:
+
+```
+    /p add a delete method that handles all three cases
+```
+
+ChatGPT sees the full class context and generates a method that fits.
 
 ## Keyboard Shortcuts
 
 | Shortcut | Context | Action |
 |----------|---------|--------|
-| <kbd>Alt</kbd>+<kbd>I</kbd> | Editor focused | Execute current line (`/p` prompt or alert) |
-| <kbd>Alt</kbd>+<kbd>C</kbd> | Editor focused | Send editor content for code review |
+| <kbd>Alt</kbd>+<kbd>I</kbd> | Editor focused | Execute current line (`/p` contextual prompt, `/r` raw prompt, or alert) |
+| <kbd>Alt</kbd>+<kbd>C</kbd> | Editor focused | Send editor content for code review with ⭐ markers |
 | <kbd>Tab</kbd> | Editor focused | Insert 4 spaces |
 | <kbd>Shift</kbd>+<kbd>Tab</kbd> | Editor focused | Remove up to 4 leading spaces from the current line |
 | <kbd>Enter</kbd> | Editor focused | New line with auto-indent matching the current line |
 
 ## How It Works
 
-The script injects a floating editor UI into ChatGPT's page. When you trigger a `/p` command:
+The script injects a floating editor UI into ChatGPT's page. When you trigger a command:
 
 1. The script snapshots the current number of assistant messages
 2. The prompt text is inserted into ChatGPT's input box and sent
@@ -145,7 +215,7 @@ The script injects a floating editor UI into ChatGPT's page. When you trigger a 
 4. It waits for ChatGPT's **stop button to disappear** (streaming complete)
 5. After a short grace period, the final response text is captured
 6. Code blocks are cleaned — language labels and copy buttons are stripped, line breaks are preserved
-7. The original `/p` line in the editor is replaced with the response, inheriting the line's indentation
+7. The original command line in the editor is replaced with the response, inheriting the line's indentation
 
 All editor state (content, position, size, window mode) is persisted in `localStorage`.
 
@@ -155,12 +225,14 @@ All editor state (content, position, size, window mode) is persisted in `localSt
 - **Runtime** — Executes at `document-idle` via Tampermonkey
 - **Storage** — Uses `localStorage` (`tm_editor_content` for text, `tm_editor_window_state` for window state)
 - **ChatGPT Integration** — Interacts with ChatGPT's DOM using `querySelector` on `#prompt-textarea` and `[data-testid="send-button"]`
+- **Two-Column Layout** — Two real `<textarea>` elements with automatic line redistribution based on viewport height
 
 ## Limitations
 
 - Depends on ChatGPT's current DOM structure — may break if ChatGPT updates its UI selectors
 - Response detection uses polling, not event-based hooks
 - Only works on `chatgpt.com`
+- Code check marker accuracy depends on ChatGPT returning minimally corrected lines
 
 ## Contributing
 

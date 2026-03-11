@@ -801,6 +801,42 @@ ${numberedContext}
         return;
     }
 
+    /* /r — raw prompt, no context, no instructions */
+
+    if(trimmed.startsWith("/r ")){
+
+        const prompt=trimmed.substring(3);
+
+        waitAbortController=new AbortController();
+        showWaitingUI();
+
+        await yieldFrame();
+
+        const response=await sendPromptToChatGPT(prompt);
+
+        hideWaitingUI();
+        waitAbortController=null;
+
+        if(response){
+
+            const indented=response
+                .split("\n")
+                .map(l=>indent+l)
+                .join("\n");
+
+            ta.value=
+                text.substring(0,start)+
+                indented+
+                text.substring(lineEnd);
+
+            ta.dispatchEvent(new Event("input"));
+            localStorage.setItem("tm_editor_content",
+                windowMode==="maximized"? mergeColumnContent() : textarea.value);
+        }
+
+        return;
+    }
+
     alert(line);
 }
 
