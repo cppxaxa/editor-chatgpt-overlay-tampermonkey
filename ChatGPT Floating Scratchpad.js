@@ -27,6 +27,7 @@ let columnContainer;  // flex wrapper for the two column textareas
 let leftTA;           // left textarea
 let rightTA;          // right textarea
 let syncing = false;  // guard against recursive input during redistribution
+let lastFocusedTA = null; // track last focused textarea for button clicks
 
 const MARKER_CHAR = "\u2B50"; // ⭐
 
@@ -68,6 +69,49 @@ function createEditor() {
     });
 
     header.textContent="Editor";
+
+    /* Action buttons beside the Editor label */
+
+    const actionBtns=document.createElement("div");
+    Object.assign(actionBtns.style,{
+        display:"flex",
+        gap:"4px",
+        marginLeft:"10px"
+    });
+
+    const runBtn=document.createElement("button");
+    runBtn.textContent="Command";
+    runBtn.title="Execute line command (Alt+I)";
+
+    const checkBtn=document.createElement("button");
+    checkBtn.textContent="Check";
+    checkBtn.title="Code check (Alt+C)";
+
+    [runBtn,checkBtn].forEach(btn=>{
+        Object.assign(btn.style,{
+            background:"#555",
+            color:"white",
+            border:"none",
+            borderRadius:"3px",
+            padding:"2px 8px",
+            cursor:"pointer",
+            fontSize:"11px"
+        });
+    });
+
+    runBtn.onclick=(e)=>{
+        e.stopPropagation();
+        handleLineAction();
+    };
+
+    checkBtn.onclick=(e)=>{
+        e.stopPropagation();
+        handleCodeCheck();
+    };
+
+    actionBtns.appendChild(runBtn);
+    actionBtns.appendChild(checkBtn);
+    header.appendChild(actionBtns);
 
     const buttons=document.createElement("div");
 
@@ -327,7 +371,10 @@ function createEditor() {
 
 function attachEditorKeydown(ta){
 
-    /* Remove ⚠ markers when cursor touches them via keyboard */
+    /* Track last focused textarea so header buttons know which one to use */
+    ta.addEventListener("focus",()=>{ lastFocusedTA=ta; });
+
+    /* Remove markers when cursor touches them via keyboard */
     ta.addEventListener("keyup",(e)=>{
 
         if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight","Home","End"].includes(e.key)){
@@ -668,10 +715,11 @@ async function handleLineAction(){
 
     const activeTA=document.activeElement;
     const isEditor=(activeTA===textarea||activeTA===leftTA||activeTA===rightTA);
-    if(!isEditor) return;
+    const editorTA=isEditor? activeTA : lastFocusedTA;
+    if(!editorTA) return;
 
     /* In maximized mode, work with the focused column textarea */
-    const ta=(windowMode==="maximized")? activeTA : textarea;
+    const ta=(windowMode==="maximized")? editorTA : textarea;
 
     const cursor=ta.selectionStart;
     const text=ta.value;
@@ -827,7 +875,7 @@ async function handleCodeCheck(){
 
     const activeTA=document.activeElement;
     const isEditor=(activeTA===textarea||activeTA===leftTA||activeTA===rightTA);
-    if(!isEditor) return;
+    if(!isEditor && !lastFocusedTA) return;
 
     /* In maximized mode, use merged content from both columns */
     /* Clear old markers first so they don't pollute the prompt */
