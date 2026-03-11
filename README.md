@@ -125,15 +125,27 @@ Suggestions:
 
 Place your cursor on any line and press <kbd>Alt</kbd>+<kbd>I</kbd>. The `/p ...` line will be replaced with ChatGPT's full response. You can then continue editing, add follow-up prompts, and build a working document.
 
+## Keyboard Shortcuts
+
+| Shortcut | Context | Action |
+|----------|---------|--------|
+| <kbd>Alt</kbd>+<kbd>I</kbd> | Editor focused | Execute current line (`/p` prompt or alert) |
+| <kbd>Alt</kbd>+<kbd>C</kbd> | Editor focused | Send editor content for code review |
+| <kbd>Tab</kbd> | Editor focused | Insert 4 spaces |
+| <kbd>Shift</kbd>+<kbd>Tab</kbd> | Editor focused | Remove up to 4 leading spaces from the current line |
+| <kbd>Enter</kbd> | Editor focused | New line with auto-indent matching the current line |
+
 ## How It Works
 
 The script injects a floating editor UI into ChatGPT's page. When you trigger a `/p` command:
 
-1. The prompt text is inserted into ChatGPT's input box
-2. The send button is automatically clicked
-3. The script polls for the assistant's response (checking every 1 second)
-4. Once the response stabilizes (no new content for 1 second), it's captured
-5. The original `/p` line in the editor is replaced with the response
+1. The script snapshots the current number of assistant messages
+2. The prompt text is inserted into ChatGPT's input box and sent
+3. It waits for a **new** assistant message to appear (count increases)
+4. It waits for ChatGPT's **stop button to disappear** (streaming complete)
+5. After a short grace period, the final response text is captured
+6. Code blocks are cleaned — language labels and copy buttons are stripped, line breaks are preserved
+7. The original `/p` line in the editor is replaced with the response, inheriting the line's indentation
 
 All editor state (content, position, size, window mode) is persisted in `localStorage`.
 
