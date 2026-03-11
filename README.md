@@ -13,6 +13,9 @@ A Tampermonkey userscript that adds a floating, resizable text editor overlay to
 - **Window Controls** — Minimize, maximize, and close buttons just like a real window
 - **Persistent State** — Editor content, position, and size are saved across page reloads
 - **ChatGPT Prompt Automation** — Send prompts to ChatGPT directly from the editor and capture responses inline
+- **Code Check** — Review your code for correctness via ChatGPT with a single shortcut
+- **Smart Indentation** — Auto-indent on Enter, Tab inserts 4 spaces, Shift+Tab removes indentation
+- **Waiting UI** — Spinner and cancel button in the titlebar while waiting for ChatGPT responses
 
 ## Installation
 
@@ -71,6 +74,44 @@ This lets you build up notes, Q&A pairs, or chain prompts without ever leaving t
 - **If the line is regular text** — the line content is shown in an alert popup (useful for quick previewing)
 
 > **Note:** The editor textarea must be focused for <kbd>Alt</kbd>+<kbd>I</kbd> to work.
+
+---
+
+### <kbd>Alt</kbd>+<kbd>C</kbd> — Code Check
+
+<kbd>Alt</kbd>+<kbd>C</kbd> sends the entire editor content to ChatGPT for a code review and displays the result in a dialog.
+
+**How to use:**
+
+1. Write or paste your code into the editor
+2. Press <kbd>Alt</kbd>+<kbd>C</kbd> while the editor is focused
+
+**What happens:**
+- The editor content is sent to ChatGPT with a prompt requesting a structured JSON review
+- The titlebar shows a ⟳ spinner and a **Cancel** button while waiting (Cancel stops the editor's wait only — ChatGPT continues independently)
+- ChatGPT responds with a JSON object containing:
+  - **correct** — whether the code is syntactically and logically correct
+  - **solves_problem** — whether the code solves the problem it appears to be targeting
+  - **summary** — a one-line description of what the code does
+  - **issues** — a list of problems found (empty if none)
+  - **suggestions** — improvement recommendations (empty if none)
+- The JSON is parsed and displayed in a formatted dialog:
+
+```
+Correct: ✅ Yes
+Solves the problem: ❌ No
+
+Summary:
+  Implements FizzBuzz but misses the edge case for n=0
+
+Issues:
+  1. No handling for n <= 0
+
+Suggestions:
+  1. Add input validation for non-positive numbers
+```
+
+> If ChatGPT doesn't return valid JSON, the raw response is shown as a fallback.
 
 ---
 

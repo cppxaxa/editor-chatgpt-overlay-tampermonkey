@@ -418,6 +418,12 @@ function registerLineReaderHotkey(){
             e.preventDefault();
             handleLineAction();
         }
+
+        if(e.altKey&&e.key.toLowerCase()==="c"){
+
+            e.preventDefault();
+            handleCodeCheck();
+        }
     });
 }
 
@@ -473,6 +479,179 @@ async function handleLineAction(){
     }
 
     alert(line);
+}
+
+/* ------------------------------- */
+/* Code Check (Alt+C) */
+/* ------------------------------- */
+
+const CODE_CHECK_PROMPT=`Review the following code. Respond ONLY with a JSON object (no markdown, no fences, no extra text) in this exact format:
+
+{
+  "correct": true or false,
+  "solves_problem": true or false,
+  "summary": "one-line description of what the code does",
+  "issues": ["issue 1", "issue 2"] or [] if none,
+  "suggestions": ["suggestion 1"] or [] if none
+}
+
+Here is the code:
+
+`;
+
+async function handleCodeCheck(){
+
+    if(!textarea) return;
+    if(document.activeElement!==textarea) return;
+
+    const code=textarea.value.trim();
+
+    if(!code){
+        alert("Editor is empty — nothing to check.");
+        return;
+    }
+
+    waitAbortController=new AbortController();
+    showWaitingUI();
+
+    const response=await sendPromptToChatGPT(CODE_CHECK_PROMPT+code);
+
+    hideWaitingUI();
+    waitAbortController=null;
+
+    if(!response) return;
+
+    let parsed=null;
+
+    try{
+
+        /* Strip markdown fences if ChatGPT wraps the JSON */
+
+        const cleaned=response
+            .replace(/^```[\w]*\n?/gm,"")
+            .replace(/```\s*$/gm,"")
+            .trim();
+
+        parsed=JSON.parse(cleaned);
+
+    }catch(e){
+
+        showResultDialog("Code Check — Raw Response",response);
+        return;
+    }
+
+    const correct=parsed.correct?"✅ Yes":"❌ No";
+    const solves=parsed.solves_problem?"✅ Yes":"❌ No";
+
+    const issueList=parsed.issues&&parsed.issues.length
+        ?parsed.issues.map((s,i)=>"  "+(i+1)+". "+s).join("\n")
+        :"  None";
+
+    const suggestionList=parsed.suggestions&&parsed.suggestions.length
+        ?parsed.suggestions.map((s,i)=>"  "+(i+1)+". "+s).join("\n")
+        :"  None";
+
+    const body=
+        "Correct: "+correct+"\n"+
+        "Solves the problem: "+solves+"\n\n"+
+        "Summary:\n  "+parsed.summary+"\n\n"+
+        "Issues:\n"+issueList+"\n\n"+
+        "Suggestions:\n"+suggestionList;
+
+    showResultDialog("Code Check Result",body);
+}
+
+/* ------------------------------- */
+/* Result Dialog */
+/* ------------------------------- */
+
+function showResultDialog(title,body){
+
+    const existing=document.getElementById("tm-result-dialog");
+    if(existing) existing.remove();
+
+    const overlay=document.createElement("div");
+    overlay.id="tm-result-dialog";
+
+    Object.assign(overlay.style,{
+        position:"fixed",
+        inset:"0",
+        background:"rgba(0,0,0,.55)",
+        zIndex:"9999999",
+        display:"flex",
+        alignItems:"center",
+        justifyContent:"center"
+    });
+
+    const dialog=document.createElement("div");
+
+    Object.assign(dialog.style,{
+        background:"#1e1e1e",
+        color:"#d4d4d4",
+        border:"1px solid #444",
+        borderRadius:"10px",
+        padding:"20px 24px",
+        maxWidth:"520px",
+        width:"90%",
+        maxHeight:"70vh",
+        overflowY:"auto",
+        fontFamily:"monospace",
+        fontSize:"13px",
+        boxShadow:"0 12px 40px rgba(0,0,0,.6)"
+    });
+
+    const heading=document.createElement("div");
+
+    Object.assign(heading.style,{
+        fontSize:"15px",
+        fontWeight:"bold",
+        marginBottom:"14px",
+        color:"white"
+    });
+
+    heading.textContent=title;
+
+    const content=document.createElement("pre");
+
+    Object.assign(content.style,{
+        whiteSpace:"pre-wrap",
+        wordBreak:"break-word",
+        margin:"0",
+        lineHeight:"1.5"
+    });
+
+    content.textContent=body;
+
+    const closeBtn=document.createElement("button");
+    closeBtn.textContent="Close";
+
+    Object.assign(closeBtn.style,{
+        marginTop:"16px",
+        background:"#444",
+        color:"white",
+        border:"none",
+        borderRadius:"6px",
+        padding:"6px 18px",
+        cursor:"pointer",
+        fontSize:"13px",
+        display:"block",
+        marginLeft:"auto"
+    });
+
+    closeBtn.onclick=()=>overlay.remove();
+
+    dialog.appendChild(heading);
+    dialog.appendChild(content);
+    dialog.appendChild(closeBtn);
+    overlay.appendChild(dialog);
+
+    overlay.addEventListener("click",(e)=>{
+        if(e.target===overlay) overlay.remove();
+    });
+
+    document.body.appendChild(overlay);
+
+    closeBtn.focus();
 }
 
 /* ------------------------------- */
