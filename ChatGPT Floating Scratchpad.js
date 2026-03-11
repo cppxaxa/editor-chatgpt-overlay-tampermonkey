@@ -439,9 +439,12 @@ async function handleLineAction(){
     const lineEnd=end===-1?text.length:end;
     const line=text.substring(start,lineEnd);
 
-    if(line.startsWith("/p ")){
+    const indent=line.match(/^[ ]*/)[0];
+    const trimmed=line.trimStart();
 
-        const prompt=line.substring(3);
+    if(trimmed.startsWith("/p ")){
+
+        const prompt=trimmed.substring(3);
 
         waitAbortController=new AbortController();
         showWaitingUI();
@@ -453,9 +456,14 @@ async function handleLineAction(){
 
         if(response){
 
+            const indented=response
+                .split("\n")
+                .map(l=>indent+l)
+                .join("\n");
+
             textarea.value=
                 text.substring(0,start)+
-                response+
+                indented+
                 text.substring(lineEnd);
 
             localStorage.setItem("tm_editor_content",textarea.value);
