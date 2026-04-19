@@ -402,7 +402,14 @@ function createEditor() {
             }else{
                 textarea.style.display="block";
             }
-            container.style.height=previousBounds?.height||"350px";
+            if(previousBounds){
+                container.style.left=previousBounds.left;
+                container.style.top=previousBounds.top;
+                container.style.width=previousBounds.width;
+                container.style.height=previousBounds.height;
+            }else{
+                container.style.height="350px";
+            }
             resizeHandle.style.display="block";
             windowMode="normal";
         }
@@ -413,7 +420,12 @@ function createEditor() {
                 exitMaximizedColumnLayout();
             }
 
-            previousBounds={height:container.style.height};
+            previousBounds={
+                left:container.style.left,
+                top:container.style.top,
+                width:container.style.width,
+                height:container.style.height
+            };
 
             textarea.style.display="none";
             columnContainer.style.display="none";
