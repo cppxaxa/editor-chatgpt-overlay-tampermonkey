@@ -228,6 +228,26 @@ function createEditor() {
         window.open("https://github.com/cppxaxa/editor-chatgpt-overlay-tampermonkey","_blank");
     };
 
+    const regenBtn=document.createElement("button");
+    regenBtn.textContent="↻";
+    regenBtn.title="Regenerate Ascii/Question/Snippets (Alt+R)";
+
+    Object.assign(regenBtn.style,{
+        background:"#555",
+        color:"white",
+        border:"none",
+        borderRadius:"3px",
+        padding:"2px 8px",
+        cursor:"pointer",
+        fontSize:"13px"
+    });
+
+    regenBtn.onclick=(e)=>{
+        e.stopPropagation();
+        regenerateCurrentTab();
+    };
+
+    actionBtns.appendChild(regenBtn);
     actionBtns.appendChild(runBtn);
     actionBtns.appendChild(checkBtn);
     actionBtns.appendChild(ghBtn);
@@ -929,6 +949,25 @@ function restoreTabState(tab){
     ta.selectionEnd=s.selEnd;
 }
 
+function regenerateCurrentTab(){
+    const code=getEditorContent();
+    const hash=simpleHash(code);
+
+    if(activeTab==="ascii"){
+        asciiCache={hash:null,content:""};
+        asciiTA.value="Regenerating ASCII diagram...";
+        generateAsciiDiagram(code,hash);
+    }else if(activeTab==="question"){
+        questionCache={hash:null,content:""};
+        questionTA.value="Regenerating question...";
+        generateQuestion(code,hash);
+    }else if(activeTab==="snippets"){
+        snippetsCache={hash:null,content:""};
+        snippetsTA.value="Regenerating snippets...";
+        generateSnippets(code,hash);
+    }
+}
+
 function switchTab(tabName){
 
     if(tabName===activeTab) return;
@@ -993,17 +1032,13 @@ function switchTab(tabName){
         questionTA.style.display="block";
         questionTA.focus();
 
-        const code=getEditorContent();
-        const hash=simpleHash(code);
-
-        if(hash===questionCache.hash && questionCache.content){
+        /* Show cached content if available, otherwise prompt user to regenerate */
+        if(questionCache.content){
             questionTA.value=questionCache.content;
             restoreTabState("question");
-            return;
+        }else{
+            questionTA.value="(Press ↻ or Alt+R to generate question)";
         }
-
-        questionTA.value="Generating question...";
-        generateQuestion(code,hash);
         return;
     }
 
@@ -1350,6 +1385,9 @@ function registerLineReaderHotkey(){
         if(e.altKey&&e.key==="2"){ e.preventDefault(); switchTab("ascii"); }
         if(e.altKey&&e.key==="3"){ e.preventDefault(); switchTab("question"); }
         if(e.altKey&&e.key==="4"){ e.preventDefault(); switchTab("snippets"); }
+
+        /* Alt+R — regenerate current tab */
+        if(e.altKey&&e.key.toLowerCase()==="r"){ e.preventDefault(); regenerateCurrentTab(); }
     });
 }
 
@@ -1502,7 +1540,7 @@ ${numberedContext}
         return;
     }
 
-    alert(line+"\n\n— Tip: /r {prompt} = raw prompt | /p {prompt} = prompt with context\n— Tabs: Alt+1 Editor | Alt+2 Ascii | Alt+3 Question | Alt+4 Snippets\n— Alt+I = Execute command | Alt+C = Code check\n— More: github.com/cppxaxa/editor-chatgpt-overlay-tampermonkey");
+    alert(line+"\n\n— Tip: /r {prompt} = raw prompt | /p {prompt} = prompt with context\n— Tabs: Alt+1 Editor | Alt+2 Ascii | Alt+3 Question | Alt+4 Snippets\n— Alt+I = Execute command | Alt+C = Code check | Alt+R = Regenerate tab\n— More: github.com/cppxaxa/editor-chatgpt-overlay-tampermonkey");
 }
 
 /* ------------------------------- */
@@ -1892,7 +1930,9 @@ function hideWaitingUI(){
         /* Re-attach click handlers since innerHTML destroyed them */
         const btns=actionBtns.querySelectorAll("button");
         btns.forEach(btn=>{
-            if(btn.textContent==="Command"){
+            if(btn.textContent==="↻"){
+                btn.onclick=(e)=>{ e.stopPropagation(); regenerateCurrentTab(); };
+            }else if(btn.textContent==="Command"){
                 btn.onclick=(e)=>{ e.stopPropagation(); handleLineAction(); };
             }else if(btn.textContent==="Check"){
                 btn.onclick=(e)=>{ e.stopPropagation(); handleCodeCheck(); };
