@@ -55,6 +55,13 @@ const tabState = {
     snippets: { scrollTop:0, selStart:0, selEnd:0 }
 };
 
+/* Undo/redo stack for Editor tab */
+const undoStack = [];
+const redoStack = [];
+const UNDO_MAX = 200;
+let undoTimer = null;
+let isUndoRedo = false; /* guard to avoid pushing while restoring */
+
 /* ------------------------------- */
 /* Editor Creation */
 /* ------------------------------- */
@@ -280,7 +287,11 @@ function createEditor() {
 
     textarea.addEventListener("input",()=>{
         localStorage.setItem("tm_editor_content",textarea.value);
+        pushUndoDebounced(textarea);
     });
+
+    /* Seed undo stack with initial content */
+    pushUndo(textarea.value,0);
 
     attachEditorKeydown(textarea);
 
@@ -329,6 +340,11 @@ function createEditor() {
         col.addEventListener("input",()=>{
             if(syncing) return;
             redistributeColumns();
+            /* Push merged content to undo stack */
+            const merged=mergeColumnContent();
+            textarea.value=merged;
+            localStorage.setItem("tm_editor_content",merged);
+            pushUndoDebounced(textarea);
         });
     });
 
@@ -601,6 +617,55 @@ function createEditor() {
 }
 
 /* ------------------------------- */
+/* Undo / Redo                     */
+/* ------------------------------- */
+
+function pushUndo(value,cursorPos){
+    if(isUndoRedo) return;
+    /* Avoid duplicate consecutive entries */
+    if(undoStack.length>0 && undoStack[undoStack.length-1].value===value) return;
+    undoStack.push({value:value,cursor:cursorPos});
+    if(undoStack.length>UNDO_MAX) undoStack.shift();
+    redoStack.length=0; /* clear redo on new edit */
+}
+
+function pushUndoDebounced(ta){
+    if(isUndoRedo) return;
+    clearTimeout(undoTimer);
+    undoTimer=setTimeout(()=>{
+        pushUndo(ta.value,ta.selectionStart);
+    },300);
+}
+
+function doUndo(ta){
+    if(undoStack.length===0) return;
+
+    /* Save current state to redo */
+    redoStack.push({value:ta.value,cursor:ta.selectionStart});
+
+    const entry=undoStack.pop();
+    isUndoRedo=true;
+    ta.value=entry.value;
+    ta.selectionStart=ta.selectionEnd=entry.cursor;
+    localStorage.setItem("tm_editor_content",ta.value);
+    isUndoRedo=false;
+}
+
+function doRedo(ta){
+    if(redoStack.length===0) return;
+
+    /* Save current state to undo */
+    undoStack.push({value:ta.value,cursor:ta.selectionStart});
+
+    const entry=redoStack.pop();
+    isUndoRedo=true;
+    ta.value=entry.value;
+    ta.selectionStart=ta.selectionEnd=entry.cursor;
+    localStorage.setItem("tm_editor_content",ta.value);
+    isUndoRedo=false;
+}
+
+/* ------------------------------- */
 /* Editor Keydown (shared)         */
 /* ------------------------------- */
 
@@ -623,6 +688,37 @@ function attachEditorKeydown(ta){
     });
 
     ta.addEventListener("keydown",(e)=>{
+
+        /* Ctrl+Z / Ctrl+Y — custom undo/redo for editor textareas only */
+        const isEditorTA=(ta===textarea||ta===leftTA||ta===rightTA);
+        if(isEditorTA && e.ctrlKey && !e.shiftKey && !e.altKey){
+            if(e.key.toLowerCase()==="z"){
+                e.preventDefault();
+                doUndo(textarea);
+                if(windowMode==="maximized"){
+                    const lines=textarea.value.split("\n");
+                    const lpc=getLinesPerCol();
+                    syncing=true;
+                    leftTA.value=lines.slice(0,lpc).join("\n");
+                    rightTA.value=lines.slice(lpc).join("\n");
+                    syncing=false;
+                }
+                return;
+            }
+            if(e.key.toLowerCase()==="y"){
+                e.preventDefault();
+                doRedo(textarea);
+                if(windowMode==="maximized"){
+                    const lines=textarea.value.split("\n");
+                    const lpc=getLinesPerCol();
+                    syncing=true;
+                    leftTA.value=lines.slice(0,lpc).join("\n");
+                    rightTA.value=lines.slice(lpc).join("\n");
+                    syncing=false;
+                }
+                return;
+            }
+        }
 
         const val=ta.value;
         const cur=ta.selectionStart;
