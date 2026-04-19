@@ -31,7 +31,7 @@ let lastFocusedTA = null; // track last focused textarea for button clicks
 
 const MARKER_CHAR = "\u2B50"; // ⭐
 
-let activeTab = "editor";       // "editor", "ascii", "question", or "snippets"
+let activeTab = "editor";       // "editor", "ascii", "question", "snippets", or "spreview"
 let asciiTA;                     // read-only textarea for ASCII diagrams
 let asciiCache = { hash: null, content: "" };
 const ASCII_CACHE_KEY = "tm_ascii_cache";
@@ -40,19 +40,24 @@ let editorTabBtn;                // tab button references for styling
 let asciiTabBtn;
 let questionTabBtn;
 let snippetsTabBtn;
+let spreviewTabBtn;
 let questionTA;                  // read-only textarea for question display
 let questionCache = { hash: null, content: "" };
 const QUESTION_CACHE_KEY = "tm_question_cache";
 let snippetsTA;                  // read-only textarea for snippets display
 let snippetsCache = { hash: null, content: "" };
 const SNIPPETS_CACHE_KEY = "tm_snippets_cache";
+let spreviewFrame;               // iframe for syntax-highlighted preview
+let spreviewCache = { hash: null, content: "" };
+const SPREVIEW_CACHE_KEY = "tm_spreview_cache";
 
 /* Per-tab cursor and scroll position */
 const tabState = {
     editor:   { scrollTop:0, selStart:0, selEnd:0 },
     ascii:    { scrollTop:0, selStart:0, selEnd:0 },
     question: { scrollTop:0, selStart:0, selEnd:0 },
-    snippets: { scrollTop:0, selStart:0, selEnd:0 }
+    snippets: { scrollTop:0, selStart:0, selEnd:0 },
+    spreview: { scrollTop:0, selStart:0, selEnd:0 }
 };
 
 /* Undo/redo stack for Editor tab */
@@ -121,7 +126,10 @@ function createEditor() {
     snippetsTabBtn=document.createElement("button");
     snippetsTabBtn.textContent="Snippets";
 
-    [editorTabBtn,asciiTabBtn,questionTabBtn,snippetsTabBtn].forEach(btn=>{
+    spreviewTabBtn=document.createElement("button");
+    spreviewTabBtn.textContent="S-Preview";
+
+    [editorTabBtn,asciiTabBtn,questionTabBtn,snippetsTabBtn,spreviewTabBtn].forEach(btn=>{
         Object.assign(btn.style,{
             background:"transparent",
             color:"#999",
@@ -138,6 +146,7 @@ function createEditor() {
     asciiTabBtn.title="Alt+2";
     questionTabBtn.title="Alt+3";
     snippetsTabBtn.title="Alt+4";
+    spreviewTabBtn.title="Alt+5";
 
     editorTabBtn.style.color="white";
     editorTabBtn.style.borderBottomColor="#4fc3f7";
@@ -158,11 +167,16 @@ function createEditor() {
         e.stopPropagation();
         switchTab("snippets");
     };
+    spreviewTabBtn.onclick=(e)=>{
+        e.stopPropagation();
+        switchTab("spreview");
+    };
 
     tabBar.appendChild(editorTabBtn);
     tabBar.appendChild(asciiTabBtn);
     tabBar.appendChild(questionTabBtn);
     tabBar.appendChild(snippetsTabBtn);
+    tabBar.appendChild(spreviewTabBtn);
     header.appendChild(tabBar);
 
     /* Action buttons beside the Editor label */
@@ -504,6 +518,21 @@ function createEditor() {
 
     container.appendChild(snippetsTA);
 
+    /* S-Preview iframe for syntax-highlighted code */
+
+    spreviewFrame=document.createElement("iframe");
+    spreviewFrame.sandbox="allow-same-origin";
+
+    Object.assign(spreviewFrame.style,{
+        flex:"1",
+        width:"100%",
+        border:"none",
+        display:"none",
+        background:"#fff"
+    });
+
+    container.appendChild(spreviewFrame);
+
     /* Load ASCII cache from localStorage */
     try{
         const cached=localStorage.getItem(ASCII_CACHE_KEY);
@@ -520,6 +549,12 @@ function createEditor() {
     try{
         const cached=localStorage.getItem(SNIPPETS_CACHE_KEY);
         if(cached) snippetsCache=JSON.parse(cached);
+    }catch(e){}
+
+    /* Load S-Preview cache from localStorage */
+    try{
+        const cached=localStorage.getItem(SPREVIEW_CACHE_KEY);
+        if(cached) spreviewCache=JSON.parse(cached);
     }catch(e){}
 
     createResizeHandle();
@@ -544,6 +579,8 @@ function createEditor() {
             }else if(activeTab==="snippets"){
                 snippetsTA.style.display="block";
                 snippetsTA.focus();
+            }else if(activeTab==="spreview"){
+                spreviewFrame.style.display="block";
             }else{
                 textarea.style.display="block";
             }
@@ -577,6 +614,7 @@ function createEditor() {
             asciiTA.style.display="none";
             questionTA.style.display="none";
             snippetsTA.style.display="none";
+            spreviewFrame.style.display="none";
             resizeHandle.style.display="none";
             container.style.height="36px";
 
@@ -912,11 +950,11 @@ function getEditorContent(){
 }
 
 function updateTabStyles(){
-    [editorTabBtn,asciiTabBtn,questionTabBtn,snippetsTabBtn].forEach(btn=>{
+    [editorTabBtn,asciiTabBtn,questionTabBtn,snippetsTabBtn,spreviewTabBtn].forEach(btn=>{
         btn.style.color="#999";
         btn.style.borderBottomColor="transparent";
     });
-    const active={editor:editorTabBtn,ascii:asciiTabBtn,question:questionTabBtn,snippets:snippetsTabBtn}[activeTab];
+    const active={editor:editorTabBtn,ascii:asciiTabBtn,question:questionTabBtn,snippets:snippetsTabBtn,spreview:spreviewTabBtn}[activeTab];
     if(active){
         active.style.color="white";
         active.style.borderBottomColor="#4fc3f7";
@@ -931,6 +969,10 @@ function getTabTA(tab){
 }
 
 function saveTabState(tab){
+    if(tab==="spreview"){
+        try{ tabState.spreview.scrollTop=spreviewFrame.contentWindow.scrollY||0; }catch(e){}
+        return;
+    }
     const ta=getTabTA(tab);
     if(!ta) return;
     tabState[tab]={
@@ -941,6 +983,10 @@ function saveTabState(tab){
 }
 
 function restoreTabState(tab){
+    if(tab==="spreview"){
+        try{ spreviewFrame.contentWindow.scrollTo(0,tabState.spreview.scrollTop); }catch(e){}
+        return;
+    }
     const ta=getTabTA(tab);
     if(!ta) return;
     const s=tabState[tab];
@@ -965,6 +1011,10 @@ function regenerateCurrentTab(){
         snippetsCache={hash:null,content:""};
         snippetsTA.value="Regenerating snippets...";
         generateSnippets(code,hash);
+    }else if(activeTab==="spreview"){
+        spreviewCache={hash:null,content:""};
+        setSpreviewContent("<p style='font-family:monospace;padding:20px;color:#555'>Regenerating preview...</p>");
+        generateSpreview(code,hash);
     }
 }
 
@@ -988,6 +1038,7 @@ function switchTab(tabName){
         asciiTA.style.display="none";
         questionTA.style.display="none";
         snippetsTA.style.display="none";
+        spreviewFrame.style.display="none";
 
         if(windowMode==="maximized"){
             columnContainer.style.display="flex";
@@ -1007,6 +1058,7 @@ function switchTab(tabName){
     asciiTA.style.display="none";
     questionTA.style.display="none";
     snippetsTA.style.display="none";
+    spreviewFrame.style.display="none";
 
     if(tabName==="ascii"){
 
@@ -1058,6 +1110,23 @@ function switchTab(tabName){
 
         snippetsTA.value="Generating snippets...";
         generateSnippets(code,hash);
+    }
+
+    if(tabName==="spreview"){
+
+        spreviewFrame.style.display="block";
+
+        const code=getEditorContent();
+        const hash=simpleHash(code);
+
+        if(hash===spreviewCache.hash && spreviewCache.content){
+            setSpreviewContent(spreviewCache.content);
+            restoreTabState("spreview");
+            return;
+        }
+
+        setSpreviewContent("<p style='font-family:monospace;padding:20px;color:#555'>Generating preview...</p>");
+        generateSpreview(code,hash);
     }
 }
 
@@ -1210,6 +1279,94 @@ async function generateSnippets(code,hash){
     }catch(e){
         if(activeTab==="snippets"){
             snippetsTA.value="(Error generating snippets: "+e.message+")";
+        }
+    }finally{
+        waitAbortController=null;
+        hideWaitingUI();
+    }
+}
+
+function setSpreviewContent(html){
+    /* Inject a CSS reset to guarantee indentation is preserved */
+    const cssReset='<style>pre,code{white-space:pre!important;tab-size:4!important}td pre{margin:0!important}</style>';
+    if(html.indexOf('<head')!==-1){
+        html=html.replace(/<head[^>]*>/i,m=>m+cssReset);
+    }else if(html.indexOf('<html')!==-1){
+        html=html.replace(/<html[^>]*>/i,m=>m+cssReset);
+    }else{
+        html=cssReset+html;
+    }
+    spreviewFrame.srcdoc=html;
+}
+
+async function generateSpreview(code,hash){
+
+    waitAbortController=new AbortController();
+    showWaitingUI();
+
+    const prompt="Take the following source code and produce a single, self-contained HTML document that displays it "+
+        "with advanced, IDE-quality syntax highlighting. Requirements:\n\n"+
+        "1. Use inline CSS only (no external stylesheets or JS)\n"+
+        "2. Light background (#fff) with high-contrast, WCAG AA compliant colors\n"+
+        "3. Color categories (colorblind-friendly palette):\n"+
+        "   - Language keywords (if, else, for, return, new, var, class, public, static, async, etc.): bold blue (#0550ae)\n"+
+        "   - Type names, class names, framework types (int, long, string, bool, List, Dictionary, PriorityQueue, "+
+        "HashSet, Array, Tuple, Task, etc.): teal (#0e7c6b) — color EVERY occurrence including in generics like List<int>\n"+
+        "   - Numbers, numeric constants, and built-in constants (long.MaxValue, int.MinValue, null, true, false): purple (#6f42c1)\n"+
+        "   - Strings and char literals: dark red (#a31515)\n"+
+        "   - Method calls and function names (.Add, .Enqueue, .TryDequeue, .ToString, .Count, etc.): orange (#953800) — "+
+        "color the dot AND the method name for EVERY call site\n"+
+        "   - Comments: italic dark gray (#57606a)\n"+
+        "   - Properties and member access (.Length, .Count, .Value): orange (#953800)\n"+
+        "   - Regular identifiers: black (#24292f)\n"+
+        "4. Important variables: Identify the semantically important variables in the code (function parameters, "+
+        "key data structures, accumulators, result variables, graph/source/target/dist/result etc.). "+
+        "Assign EACH important variable its own distinct soft pastel background color so they are visually "+
+        "distinguishable at a glance. Use colors like: #fff3cd (warm yellow), #d1ecf1 (light blue), "+
+        "#d4edda (light green), #f8d7da (light pink), #e2d9f3 (light lavender), #fde2c8 (light peach), "+
+        "#d6eaf8 (sky blue), #dcedc8 (pale lime). Each variable gets ONE consistent color across ALL its "+
+        "occurrences throughout the entire code — not just at declaration but EVERY usage. "+
+        "Limit to 6-8 most important variables to avoid visual clutter.\n"+
+        "5. Use a monospace font (Consolas, monospace), line numbers in a gutter column, and comfortable line spacing (1.5)\n"+
+        "6. Detect the programming language automatically\n"+
+        "7. CRITICAL: Preserve ALL indentation exactly. Use a <pre> element with white-space:pre. "+
+        "Use a <table> layout where column 1 is the line number (right-aligned, gray, padding-right:1em) "+
+        "and column 2 is the code line inside a <pre> with margin:0 and white-space:pre. "+
+        "Do NOT trim or collapse any leading spaces or tabs.\n"+
+        "8. Respond ONLY with the complete HTML document, nothing else — no explanations, no markdown fences\n\n"+
+        "Code:\n"+code;
+
+    try{
+        const response=await sendPromptToChatGPT(prompt);
+
+        if(waitAbortController && waitAbortController.signal.aborted){
+            return;
+        }
+
+        if(response){
+            /* The response might have markdown fences — strip them */
+            let html=response
+                .replace(/^```html?\n?/i,"")
+                .replace(/```\s*$/,"")
+                .trim();
+
+            spreviewCache={hash:hash,content:html};
+
+            try{
+                localStorage.setItem(SPREVIEW_CACHE_KEY,JSON.stringify(spreviewCache));
+            }catch(e){}
+
+            if(activeTab==="spreview"){
+                setSpreviewContent(html);
+            }
+        }else{
+            if(activeTab==="spreview"){
+                setSpreviewContent("<p style='font-family:monospace;padding:20px;color:red'>(Failed to generate preview)</p>");
+            }
+        }
+    }catch(e){
+        if(activeTab==="spreview"){
+            setSpreviewContent("<p style='font-family:monospace;padding:20px;color:red'>(Error: "+e.message+")</p>");
         }
     }finally{
         waitAbortController=null;
@@ -1380,11 +1537,12 @@ function registerLineReaderHotkey(){
             handleCodeCheck();
         }
 
-        /* Alt+1..4 — switch tabs */
+        /* Alt+1..5 — switch tabs */
         if(e.altKey&&e.key==="1"){ e.preventDefault(); switchTab("editor"); }
         if(e.altKey&&e.key==="2"){ e.preventDefault(); switchTab("ascii"); }
         if(e.altKey&&e.key==="3"){ e.preventDefault(); switchTab("question"); }
         if(e.altKey&&e.key==="4"){ e.preventDefault(); switchTab("snippets"); }
+        if(e.altKey&&e.key==="5"){ e.preventDefault(); switchTab("spreview"); }
 
         /* Alt+R — regenerate current tab */
         if(e.altKey&&e.key.toLowerCase()==="r"){ e.preventDefault(); regenerateCurrentTab(); }
@@ -1540,7 +1698,7 @@ ${numberedContext}
         return;
     }
 
-    alert(line+"\n\n— Tip: /r {prompt} = raw prompt | /p {prompt} = prompt with context\n— Tabs: Alt+1 Editor | Alt+2 Ascii | Alt+3 Question | Alt+4 Snippets\n— Alt+I = Execute command | Alt+C = Code check | Alt+R = Regenerate tab\n— More: github.com/cppxaxa/editor-chatgpt-overlay-tampermonkey");
+    alert(line+"\n\n— Tip: /r {prompt} = raw prompt | /p {prompt} = prompt with context\n— Tabs: Alt+1 Editor | Alt+2 Ascii | Alt+3 Question | Alt+4 Snippets | Alt+5 S-Preview\n— Alt+I = Execute command | Alt+C = Code check | Alt+R = Regenerate tab\n— More: github.com/cppxaxa/editor-chatgpt-overlay-tampermonkey");
 }
 
 /* ------------------------------- */
