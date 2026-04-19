@@ -119,6 +119,11 @@ function createEditor() {
         });
     });
 
+    editorTabBtn.title="Alt+1";
+    asciiTabBtn.title="Alt+2";
+    questionTabBtn.title="Alt+3";
+    snippetsTabBtn.title="Alt+4";
+
     editorTabBtn.style.color="white";
     editorTabBtn.style.borderBottomColor="#4fc3f7";
 
@@ -434,7 +439,7 @@ function createEditor() {
     /* Snippets display area */
 
     snippetsTA=document.createElement("textarea");
-    snippetsTA.readOnly=true;
+    /* Not read-only — allows visible blinking caret for keyboard navigation */
     snippetsTA.spellcheck=false;
 
     Object.assign(snippetsTA.style,{
@@ -488,10 +493,13 @@ function createEditor() {
             /* Restore based on active tab */
             if(activeTab==="ascii"){
                 asciiTA.style.display="block";
+                asciiTA.focus();
             }else if(activeTab==="question"){
                 questionTA.style.display="block";
+                questionTA.focus();
             }else if(activeTab==="snippets"){
                 snippetsTA.style.display="block";
+                snippetsTA.focus();
             }else{
                 textarea.style.display="block";
             }
@@ -810,8 +818,10 @@ function switchTab(tabName){
 
         if(windowMode==="maximized"){
             columnContainer.style.display="flex";
+            (lastFocusedTA||leftTA).focus();
         }else{
             textarea.style.display="block";
+            textarea.focus();
         }
         return;
     }
@@ -826,6 +836,7 @@ function switchTab(tabName){
     if(tabName==="ascii"){
 
         asciiTA.style.display="block";
+        asciiTA.focus();
 
         const code=getEditorContent();
         const hash=simpleHash(code);
@@ -843,6 +854,7 @@ function switchTab(tabName){
     if(tabName==="question"){
 
         questionTA.style.display="block";
+        questionTA.focus();
 
         const code=getEditorContent();
         const hash=simpleHash(code);
@@ -860,6 +872,7 @@ function switchTab(tabName){
     if(tabName==="snippets"){
 
         snippetsTA.style.display="block";
+        snippetsTA.focus();
 
         const code=getEditorContent();
         const hash=simpleHash(code);
@@ -1192,6 +1205,12 @@ function registerLineReaderHotkey(){
             e.preventDefault();
             handleCodeCheck();
         }
+
+        /* Alt+1..4 — switch tabs */
+        if(e.altKey&&e.key==="1"){ e.preventDefault(); switchTab("editor"); }
+        if(e.altKey&&e.key==="2"){ e.preventDefault(); switchTab("ascii"); }
+        if(e.altKey&&e.key==="3"){ e.preventDefault(); switchTab("question"); }
+        if(e.altKey&&e.key==="4"){ e.preventDefault(); switchTab("snippets"); }
     });
 }
 
@@ -1344,7 +1363,7 @@ ${numberedContext}
         return;
     }
 
-    alert(line+"\n\n— Tip: /r {prompt} = raw prompt | /p {prompt} = prompt with context\n— More: github.com/cppxaxa/editor-chatgpt-overlay-tampermonkey");
+    alert(line+"\n\n— Tip: /r {prompt} = raw prompt | /p {prompt} = prompt with context\n— Tabs: Alt+1 Editor | Alt+2 Ascii | Alt+3 Question | Alt+4 Snippets\n— Alt+I = Execute command | Alt+C = Code check\n— More: github.com/cppxaxa/editor-chatgpt-overlay-tampermonkey");
 }
 
 /* ------------------------------- */
