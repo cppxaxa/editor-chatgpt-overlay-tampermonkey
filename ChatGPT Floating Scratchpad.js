@@ -31,12 +31,16 @@ let lastFocusedTA = null; // track last focused textarea for button clicks
 
 const MARKER_CHAR = "\u2B50"; // ⭐
 
-let activeTab = "editor";       // "editor" or "ascii"
+let activeTab = "editor";       // "editor", "ascii", or "question"
 let asciiTA;                     // read-only textarea for ASCII diagrams
 let asciiCache = { hash: null, content: "" };
 const ASCII_CACHE_KEY = "tm_ascii_cache";
 let editorTabBtn;                // tab button references for styling
 let asciiTabBtn;
+let questionTabBtn;
+let questionTA;                  // read-only textarea for question display
+let questionCache = { hash: null, content: "" };
+const QUESTION_CACHE_KEY = "tm_question_cache";
 
 /* ------------------------------- */
 /* Editor Creation */
@@ -91,7 +95,10 @@ function createEditor() {
     asciiTabBtn=document.createElement("button");
     asciiTabBtn.textContent="Ascii design";
 
-    [editorTabBtn,asciiTabBtn].forEach(btn=>{
+    questionTabBtn=document.createElement("button");
+    questionTabBtn.textContent="Question";
+
+    [editorTabBtn,asciiTabBtn,questionTabBtn].forEach(btn=>{
         Object.assign(btn.style,{
             background:"transparent",
             color:"#999",
@@ -115,9 +122,14 @@ function createEditor() {
         e.stopPropagation();
         switchTab("ascii");
     };
+    questionTabBtn.onclick=(e)=>{
+        e.stopPropagation();
+        switchTab("question");
+    };
 
     tabBar.appendChild(editorTabBtn);
     tabBar.appendChild(asciiTabBtn);
+    tabBar.appendChild(questionTabBtn);
     header.appendChild(tabBar);
 
     /* Action buttons beside the Editor label */
@@ -382,10 +394,40 @@ function createEditor() {
 
     container.appendChild(asciiTA);
 
+    /* Question display area */
+
+    questionTA=document.createElement("textarea");
+    questionTA.readOnly=true;
+    questionTA.spellcheck=false;
+
+    Object.assign(questionTA.style,{
+        flex:"1",
+        width:"100%",
+        resize:"none",
+        background:"#1e1e1e",
+        color:"#c9a36a",
+        border:"none",
+        outline:"none",
+        padding:"10px",
+        fontFamily:"monospace",
+        fontSize:"13px",
+        lineHeight:"18px",
+        tabSize:"4",
+        display:"none"
+    });
+
+    container.appendChild(questionTA);
+
     /* Load ASCII cache from localStorage */
     try{
         const cached=localStorage.getItem(ASCII_CACHE_KEY);
         if(cached) asciiCache=JSON.parse(cached);
+    }catch(e){}
+
+    /* Load Question cache from localStorage */
+    try{
+        const cached=localStorage.getItem(QUESTION_CACHE_KEY);
+        if(cached) questionCache=JSON.parse(cached);
     }catch(e){}
 
     createResizeHandle();
@@ -403,6 +445,8 @@ function createEditor() {
             /* Restore based on active tab */
             if(activeTab==="ascii"){
                 asciiTA.style.display="block";
+            }else if(activeTab==="question"){
+                questionTA.style.display="block";
             }else{
                 textarea.style.display="block";
             }
@@ -434,6 +478,7 @@ function createEditor() {
             textarea.style.display="none";
             columnContainer.style.display="none";
             asciiTA.style.display="none";
+            questionTA.style.display="none";
             resizeHandle.style.display="none";
             container.style.height="36px";
 
@@ -689,16 +734,14 @@ function getEditorContent(){
 }
 
 function updateTabStyles(){
-    if(activeTab==="editor"){
-        editorTabBtn.style.color="white";
-        editorTabBtn.style.borderBottomColor="#4fc3f7";
-        asciiTabBtn.style.color="#999";
-        asciiTabBtn.style.borderBottomColor="transparent";
-    }else{
-        asciiTabBtn.style.color="white";
-        asciiTabBtn.style.borderBottomColor="#4fc3f7";
-        editorTabBtn.style.color="#999";
-        editorTabBtn.style.borderBottomColor="transparent";
+    [editorTabBtn,asciiTabBtn,questionTabBtn].forEach(btn=>{
+        btn.style.color="#999";
+        btn.style.borderBottomColor="transparent";
+    });
+    const active={editor:editorTabBtn,ascii:asciiTabBtn,question:questionTabBtn}[activeTab];
+    if(active){
+        active.style.color="white";
+        active.style.borderBottomColor="#4fc3f7";
     }
 }
 
@@ -710,12 +753,13 @@ function switchTab(tabName){
 
     if(tabName==="editor"){
 
-        /* Abort any in-flight ASCII generation */
+        /* Abort any in-flight generation */
         if(waitAbortController){
             waitAbortController.abort();
         }
 
         asciiTA.style.display="none";
+        questionTA.style.display="none";
 
         if(windowMode==="maximized"){
             columnContainer.style.display="flex";
@@ -725,24 +769,44 @@ function switchTab(tabName){
         return;
     }
 
-    /* tabName === "ascii" */
-
+    /* Hide editor areas for non-editor tabs */
     textarea.style.display="none";
     columnContainer.style.display="none";
-    asciiTA.style.display="block";
+    asciiTA.style.display="none";
+    questionTA.style.display="none";
 
-    const code=getEditorContent();
-    const hash=simpleHash(code);
+    if(tabName==="ascii"){
 
-    if(hash===asciiCache.hash && asciiCache.content){
-        asciiTA.value=asciiCache.content;
+        asciiTA.style.display="block";
+
+        const code=getEditorContent();
+        const hash=simpleHash(code);
+
+        if(hash===asciiCache.hash && asciiCache.content){
+            asciiTA.value=asciiCache.content;
+            return;
+        }
+
+        asciiTA.value="Generating ASCII diagram...";
+        generateAsciiDiagram(code,hash);
         return;
     }
 
-    /* Generate new ASCII diagram via ChatGPT */
-    asciiTA.value="Generating ASCII diagram...";
+    if(tabName==="question"){
 
-    generateAsciiDiagram(code,hash);
+        questionTA.style.display="block";
+
+        const code=getEditorContent();
+        const hash=simpleHash(code);
+
+        if(hash===questionCache.hash && questionCache.content){
+            questionTA.value=questionCache.content;
+            return;
+        }
+
+        questionTA.value="Generating question...";
+        generateQuestion(code,hash);
+    }
 }
 
 async function generateAsciiDiagram(code,hash){
@@ -781,6 +845,60 @@ async function generateAsciiDiagram(code,hash){
     }catch(e){
         if(activeTab==="ascii"){
             asciiTA.value="(Error generating ASCII diagram: "+e.message+")";
+        }
+    }finally{
+        waitAbortController=null;
+        hideWaitingUI();
+    }
+}
+
+async function generateQuestion(code,hash){
+
+    waitAbortController=new AbortController();
+    showWaitingUI();
+
+    const prompt="Analyze the following code (it may be partial/half-written) and figure out what problem it is solving. "+
+        "If it is a LeetCode problem, identify the question number and title. Follow this EXACT format:\n\n"+
+        "Title: [LeetCode #number] Problem Title\n"+
+        "(If you cannot identify the exact LeetCode question, use: [x] Unable to identify LeetCode question - Best guess: <title>)\n\n"+
+        "## Question\n<Full problem statement>\n\n"+
+        "## Constraints\n<List all constraints>\n\n"+
+        "## Example 1\nInput: ...\nOutput: ...\nExplanation: ...\n\n"+
+        "## Example 2\nInput: ...\nOutput: ...\nExplanation: ...\n\n"+
+        "## Hints\n<2-3 hints>\n\n"+
+        "## Companies Asked\n<List of companies known to ask this>\n\n"+
+        "## Expected Complexity (Interview)\nTime: O(...)\nSpace: O(...)\n\n"+
+        "## Topics\n<List of relevant topics/tags>\n\n"+
+        "If it is NOT a LeetCode question, still frame the problem the code is trying to solve with corner cases, expected TC and SC.\n"+
+        "You may use ASCII diagrams where helpful.\n"+
+        "Enclose your ENTIRE response inside ```md and ``` so it is treated as markdown code.\n\n"+
+        "Code:\n"+code;
+
+    try{
+        const response=await sendPromptToChatGPT(prompt);
+
+        if(waitAbortController && waitAbortController.signal.aborted){
+            return;
+        }
+
+        if(response){
+            questionCache={hash:hash,content:response};
+
+            try{
+                localStorage.setItem(QUESTION_CACHE_KEY,JSON.stringify(questionCache));
+            }catch(e){}
+
+            if(activeTab==="question"){
+                questionTA.value=response;
+            }
+        }else{
+            if(activeTab==="question"){
+                questionTA.value="(Failed to generate question)";
+            }
+        }
+    }catch(e){
+        if(activeTab==="question"){
+            questionTA.value="(Error generating question: "+e.message+")";
         }
     }finally{
         waitAbortController=null;
@@ -957,6 +1075,29 @@ function registerLineReaderHotkey(){
 /* Line Reader */
 /* ------------------------------- */
 
+/* Apply indent to a multi-line response: strip the response's own common
+   leading whitespace, then prepend the desired indent to every line.
+   This avoids double-indenting lines 2+ when ChatGPT already indents them. */
+
+function applyIndent(response,indent){
+    const lines=response.split("\n");
+    /* The first line's leading whitespace is always stripped by extractCleanText's
+       .trim(), so compute the common indent from lines 2+ only. */
+    let minLead=Infinity;
+    for(let i=1;i<lines.length;i++){
+        if(lines[i].trim().length===0) continue;
+        const lead=lines[i].match(/^[ ]*/)[0].length;
+        if(lead<minLead) minLead=lead;
+    }
+    if(!isFinite(minLead)) minLead=0;
+
+    return lines.map((l,i)=>{
+        if(l.trim().length===0) return indent;
+        if(i===0) return indent+l; /* first line already trimmed */
+        return indent+l.substring(minLead);
+    }).join("\n");
+}
+
 async function handleLineAction(){
 
     if(!textarea) return;
@@ -1031,10 +1172,7 @@ ${numberedContext}
 
         if(response){
 
-            const indented=response
-                .split("\n")
-                .map(l=>indent+l)
-                .join("\n");
+            const indented=applyIndent(response,indent);
 
             ta.value=
                 text.substring(0,start)+
@@ -1067,10 +1205,7 @@ ${numberedContext}
 
         if(response){
 
-            const indented=response
-                .split("\n")
-                .map(l=>indent+l)
-                .join("\n");
+            const indented=applyIndent(response,indent);
 
             ta.value=
                 text.substring(0,start)+
