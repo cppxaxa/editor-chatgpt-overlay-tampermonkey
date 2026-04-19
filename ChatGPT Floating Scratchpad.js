@@ -35,6 +35,7 @@ let activeTab = "editor";       // "editor", "ascii", or "question"
 let asciiTA;                     // read-only textarea for ASCII diagrams
 let asciiCache = { hash: null, content: "" };
 const ASCII_CACHE_KEY = "tm_ascii_cache";
+let checkCache = { hash: null, parsed: null, body: "" };
 let editorTabBtn;                // tab button references for styling
 let asciiTabBtn;
 let questionTabBtn;
@@ -1349,6 +1350,27 @@ async function handleCodeCheck(){
         return;
     }
 
+    const hash=simpleHash(code);
+
+    /* If code hasn't changed, reuse cached result */
+    if(hash===checkCache.hash && checkCache.parsed){
+        showResultDialog("Code Check Result (cached)",checkCache.body);
+        if(checkCache.parsed.markers&&checkCache.parsed.markers.length){
+            if(windowMode==="maximized"){
+                textarea.value=mergeColumnContent();
+                insertMarkers(textarea, checkCache.parsed.markers);
+                const lines=textarea.value.split("\n");
+                const lpc=getLinesPerCol();
+                leftTA.value=lines.slice(0,lpc).join("\n");
+                rightTA.value=lines.slice(lpc).join("\n");
+                saveMergedContent();
+            } else {
+                insertMarkers(textarea, checkCache.parsed.markers);
+            }
+        }
+        return;
+    }
+
     waitAbortController=new AbortController();
     showWaitingUI();
 
@@ -1399,6 +1421,9 @@ async function handleCodeCheck(){
         "Summary:\n  "+parsed.summary+"\n\n"+
         "Issues:\n"+issueList+"\n\n"+
         "Suggestions:\n"+suggestionList;
+
+    /* Cache the result */
+    checkCache={hash:hash,parsed:parsed,body:body};
 
     showResultDialog("Code Check Result",body);
 
