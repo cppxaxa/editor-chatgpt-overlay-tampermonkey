@@ -78,9 +78,11 @@ function createEditor() {
     /* Tab bar replaces static "Editor" label */
 
     const tabBar=document.createElement("div");
+    tabBar.className="tm-tab-bar";
     Object.assign(tabBar.style,{
         display:"flex",
-        gap:"0"
+        gap:"0",
+        flexShrink:"0"
     });
 
     editorTabBtn=document.createElement("button");
@@ -121,10 +123,12 @@ function createEditor() {
     /* Action buttons beside the Editor label */
 
     const actionBtns=document.createElement("div");
+    actionBtns.className="tm-action-btns";
     Object.assign(actionBtns.style,{
         display:"flex",
         gap:"4px",
-        marginLeft:"10px"
+        marginLeft:"10px",
+        alignItems:"center"
     });
 
     const runBtn=document.createElement("button");
@@ -1382,9 +1386,12 @@ function showWaitingUI(){
 
     if(!headerEl) return;
 
-    while(headerEl.firstChild){
-        if(headerEl.firstChild===headerEl.querySelector("div")) break;
-        headerEl.removeChild(headerEl.firstChild);
+    /* Hide action buttons and show waiting indicator in their place */
+    const actionBtns=headerEl.querySelector(".tm-action-btns");
+    if(actionBtns){
+        /* Store original children so we can restore them */
+        actionBtns._savedHTML=actionBtns.innerHTML;
+        actionBtns.innerHTML="";
     }
 
     const indicator=document.createElement("span");
@@ -1426,19 +1433,33 @@ function showWaitingUI(){
         if(waitAbortController) waitAbortController.abort();
     };
 
-    headerEl.insertBefore(indicator,headerEl.firstChild);
-    headerEl.insertBefore(cancelBtn,headerEl.querySelector("div"));
+    if(actionBtns){
+        actionBtns.appendChild(indicator);
+        actionBtns.appendChild(cancelBtn);
+    }
 }
 
 function hideWaitingUI(){
 
     if(!headerEl) return;
 
-    const indicator=headerEl.querySelector(".tm-wait-indicator");
-    if(indicator) indicator.remove();
+    const actionBtns=headerEl.querySelector(".tm-action-btns");
+    if(actionBtns && actionBtns._savedHTML!=null){
+        actionBtns.innerHTML=actionBtns._savedHTML;
+        delete actionBtns._savedHTML;
 
-    const cancelBtn=headerEl.querySelector(".tm-cancel-btn");
-    if(cancelBtn) cancelBtn.remove();
+        /* Re-attach click handlers since innerHTML destroyed them */
+        const btns=actionBtns.querySelectorAll("button");
+        btns.forEach(btn=>{
+            if(btn.textContent==="Command"){
+                btn.onclick=(e)=>{ e.stopPropagation(); handleLineAction(); };
+            }else if(btn.textContent==="Check"){
+                btn.onclick=(e)=>{ e.stopPropagation(); handleCodeCheck(); };
+            }else if(btn.querySelector("svg")){
+                btn.onclick=(e)=>{ e.stopPropagation(); window.open("https://github.com/cppxaxa/editor-chatgpt-overlay-tampermonkey","_blank"); };
+            }
+        });
+    }
 }
 
 /* ------------------------------- */
