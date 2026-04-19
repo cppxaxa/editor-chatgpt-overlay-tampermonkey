@@ -31,6 +31,13 @@ let lastFocusedTA = null; // track last focused textarea for button clicks
 
 const MARKER_CHAR = "\u2B50"; // ⭐
 
+let activeTab = "editor";       // "editor" or "ascii"
+let asciiTA;                     // read-only textarea for ASCII diagrams
+let asciiCache = { hash: null, content: "" };
+const ASCII_CACHE_KEY = "tm_ascii_cache";
+let editorTabBtn;                // tab button references for styling
+let asciiTabBtn;
+
 /* ------------------------------- */
 /* Editor Creation */
 /* ------------------------------- */
@@ -68,7 +75,48 @@ function createEditor() {
         fontSize:"13px"
     });
 
-    header.textContent="Editor";
+    /* Tab bar replaces static "Editor" label */
+
+    const tabBar=document.createElement("div");
+    Object.assign(tabBar.style,{
+        display:"flex",
+        gap:"0"
+    });
+
+    editorTabBtn=document.createElement("button");
+    editorTabBtn.textContent="Editor";
+
+    asciiTabBtn=document.createElement("button");
+    asciiTabBtn.textContent="Ascii design";
+
+    [editorTabBtn,asciiTabBtn].forEach(btn=>{
+        Object.assign(btn.style,{
+            background:"transparent",
+            color:"#999",
+            border:"none",
+            borderBottom:"2px solid transparent",
+            padding:"4px 10px",
+            cursor:"pointer",
+            fontSize:"12px",
+            fontFamily:"inherit"
+        });
+    });
+
+    editorTabBtn.style.color="white";
+    editorTabBtn.style.borderBottomColor="#4fc3f7";
+
+    editorTabBtn.onclick=(e)=>{
+        e.stopPropagation();
+        switchTab("editor");
+    };
+    asciiTabBtn.onclick=(e)=>{
+        e.stopPropagation();
+        switchTab("ascii");
+    };
+
+    tabBar.appendChild(editorTabBtn);
+    tabBar.appendChild(asciiTabBtn);
+    header.appendChild(tabBar);
 
     /* Action buttons beside the Editor label */
 
@@ -176,7 +224,7 @@ function createEditor() {
         width:"100%",
         resize:"none",
         background:"#1e1e1e",
-        color:"#d4d4d4",
+        color:"#c9a36a",
         border:"none",
         outline:"none",
         padding:"10px",
@@ -226,7 +274,7 @@ function createEditor() {
             padding:"10px",
             fontFamily:"monospace",
             fontSize:"13px",
-            color:"#d4d4d4",
+            color:"#c9a36a",
             background:"#1e1e1e",
             border:"none",
             outline:"none",
@@ -306,6 +354,36 @@ function createEditor() {
     columnContainer.appendChild(rightTA);
     container.appendChild(columnContainer);
 
+    /* ASCII design display area */
+
+    asciiTA=document.createElement("textarea");
+    asciiTA.readOnly=true;
+    asciiTA.spellcheck=false;
+
+    Object.assign(asciiTA.style,{
+        flex:"1",
+        width:"100%",
+        resize:"none",
+        background:"#1e1e1e",
+        color:"#c9a36a",
+        border:"none",
+        outline:"none",
+        padding:"10px",
+        fontFamily:"monospace",
+        fontSize:"13px",
+        lineHeight:"18px",
+        tabSize:"4",
+        display:"none"
+    });
+
+    container.appendChild(asciiTA);
+
+    /* Load ASCII cache from localStorage */
+    try{
+        const cached=localStorage.getItem(ASCII_CACHE_KEY);
+        if(cached) asciiCache=JSON.parse(cached);
+    }catch(e){}
+
     createResizeHandle();
 
     document.body.appendChild(container);
@@ -318,7 +396,12 @@ function createEditor() {
 
         if(windowMode==="minimized"){
 
-            textarea.style.display="block";
+            /* Restore based on active tab */
+            if(activeTab==="ascii"){
+                asciiTA.style.display="block";
+            }else{
+                textarea.style.display="block";
+            }
             container.style.height=previousBounds?.height||"350px";
             resizeHandle.style.display="block";
             windowMode="normal";
@@ -326,7 +409,7 @@ function createEditor() {
         else{
 
             /* If minimizing from maximized, tear down column layout first */
-            if(windowMode==="maximized"){
+            if(windowMode==="maximized" && activeTab==="editor"){
                 exitMaximizedColumnLayout();
             }
 
@@ -334,6 +417,7 @@ function createEditor() {
 
             textarea.style.display="none";
             columnContainer.style.display="none";
+            asciiTA.style.display="none";
             resizeHandle.style.display="none";
             container.style.height="36px";
 
@@ -362,11 +446,16 @@ function createEditor() {
             resizeHandle.style.display="none";
 
             windowMode="maximized";
-            enterMaximizedColumnLayout();
+            if(activeTab==="editor"){
+                enterMaximizedColumnLayout();
+            }
+            /* If ascii tab is active, asciiTA already visible full-width */
         }
         else{
 
-            exitMaximizedColumnLayout();
+            if(activeTab==="editor"){
+                exitMaximizedColumnLayout();
+            }
 
             if(previousBounds){
 
@@ -561,6 +650,126 @@ function exitMaximizedColumnLayout(){
 
     columnContainer.style.display="none";
     textarea.style.display="block";
+}
+
+/* ------------------------------- */
+/* Tab Switching & ASCII Design    */
+/* ------------------------------- */
+
+function simpleHash(str){
+    let hash=5381;
+    for(let i=0;i<str.length;i++){
+        hash=((hash<<5)+hash)+str.charCodeAt(i);
+        hash|=0; // Convert to 32-bit int
+    }
+    return hash.toString(36);
+}
+
+function getEditorContent(){
+    if(windowMode==="maximized"){
+        return mergeColumnContent();
+    }
+    return textarea.value;
+}
+
+function updateTabStyles(){
+    if(activeTab==="editor"){
+        editorTabBtn.style.color="white";
+        editorTabBtn.style.borderBottomColor="#4fc3f7";
+        asciiTabBtn.style.color="#999";
+        asciiTabBtn.style.borderBottomColor="transparent";
+    }else{
+        asciiTabBtn.style.color="white";
+        asciiTabBtn.style.borderBottomColor="#4fc3f7";
+        editorTabBtn.style.color="#999";
+        editorTabBtn.style.borderBottomColor="transparent";
+    }
+}
+
+function switchTab(tabName){
+
+    if(tabName===activeTab) return;
+    activeTab=tabName;
+    updateTabStyles();
+
+    if(tabName==="editor"){
+
+        /* Abort any in-flight ASCII generation */
+        if(waitAbortController){
+            waitAbortController.abort();
+        }
+
+        asciiTA.style.display="none";
+
+        if(windowMode==="maximized"){
+            columnContainer.style.display="flex";
+        }else{
+            textarea.style.display="block";
+        }
+        return;
+    }
+
+    /* tabName === "ascii" */
+
+    textarea.style.display="none";
+    columnContainer.style.display="none";
+    asciiTA.style.display="block";
+
+    const code=getEditorContent();
+    const hash=simpleHash(code);
+
+    if(hash===asciiCache.hash && asciiCache.content){
+        asciiTA.value=asciiCache.content;
+        return;
+    }
+
+    /* Generate new ASCII diagram via ChatGPT */
+    asciiTA.value="Generating ASCII diagram...";
+
+    generateAsciiDiagram(code,hash);
+}
+
+async function generateAsciiDiagram(code,hash){
+
+    waitAbortController=new AbortController();
+    showWaitingUI();
+
+    const prompt="Analyze the following code and create an ASCII box diagram showing its architecture, "+
+        "main components, and their relationships. Use simple ASCII box drawing characters "+
+        "(+, -, |, >, arrows). Keep it concise and readable. Respond ONLY with the ASCII "+
+        "diagram, no explanations enclosed inside triple quotes pair : \"```md and ```\", denoting code."+
+        "\n\nCode:\n"+code;
+
+    try{
+        const response=await sendPromptToChatGPT(prompt);
+
+        if(waitAbortController && waitAbortController.signal.aborted){
+            return;
+        }
+
+        if(response){
+            asciiCache={hash:hash,content:response};
+
+            try{
+                localStorage.setItem(ASCII_CACHE_KEY,JSON.stringify(asciiCache));
+            }catch(e){}
+
+            if(activeTab==="ascii"){
+                asciiTA.value=response;
+            }
+        }else{
+            if(activeTab==="ascii"){
+                asciiTA.value="(Failed to generate ASCII diagram)";
+            }
+        }
+    }catch(e){
+        if(activeTab==="ascii"){
+            asciiTA.value="(Error generating ASCII diagram: "+e.message+")";
+        }
+    }finally{
+        waitAbortController=null;
+        hideWaitingUI();
+    }
 }
 
 /* ------------------------------- */
@@ -1086,7 +1295,7 @@ function showResultDialog(title,body){
 
     Object.assign(dialog.style,{
         background:"#1e1e1e",
-        color:"#d4d4d4",
+        color:"#c9a36a",
         border:"1px solid #444",
         borderRadius:"10px",
         padding:"20px 24px",
@@ -1218,18 +1427,6 @@ function hideWaitingUI(){
 
     const cancelBtn=headerEl.querySelector(".tm-cancel-btn");
     if(cancelBtn) cancelBtn.remove();
-
-    const existing=headerEl.firstChild;
-    if(!existing||existing.nodeType!==Node.TEXT_NODE||existing.textContent!=="Editor"){
-
-        const textNode=document.createTextNode("Editor");
-
-        if(headerEl.firstChild){
-            headerEl.insertBefore(textNode,headerEl.firstChild);
-        }else{
-            headerEl.appendChild(textNode);
-        }
-    }
 }
 
 /* ------------------------------- */
