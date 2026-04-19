@@ -31,7 +31,7 @@ let lastFocusedTA = null; // track last focused textarea for button clicks
 
 const MARKER_CHAR = "\u2B50"; // ⭐
 
-let activeTab = "editor";       // "editor", "ascii", or "question"
+let activeTab = "editor";       // "editor", "ascii", "question", or "snippets"
 let asciiTA;                     // read-only textarea for ASCII diagrams
 let asciiCache = { hash: null, content: "" };
 const ASCII_CACHE_KEY = "tm_ascii_cache";
@@ -39,9 +39,13 @@ let checkCache = { hash: null, parsed: null, body: "" };
 let editorTabBtn;                // tab button references for styling
 let asciiTabBtn;
 let questionTabBtn;
+let snippetsTabBtn;
 let questionTA;                  // read-only textarea for question display
 let questionCache = { hash: null, content: "" };
 const QUESTION_CACHE_KEY = "tm_question_cache";
+let snippetsTA;                  // read-only textarea for snippets display
+let snippetsCache = { hash: null, content: "" };
+const SNIPPETS_CACHE_KEY = "tm_snippets_cache";
 
 /* ------------------------------- */
 /* Editor Creation */
@@ -99,7 +103,10 @@ function createEditor() {
     questionTabBtn=document.createElement("button");
     questionTabBtn.textContent="Question";
 
-    [editorTabBtn,asciiTabBtn,questionTabBtn].forEach(btn=>{
+    snippetsTabBtn=document.createElement("button");
+    snippetsTabBtn.textContent="Snippets";
+
+    [editorTabBtn,asciiTabBtn,questionTabBtn,snippetsTabBtn].forEach(btn=>{
         Object.assign(btn.style,{
             background:"transparent",
             color:"#999",
@@ -127,10 +134,15 @@ function createEditor() {
         e.stopPropagation();
         switchTab("question");
     };
+    snippetsTabBtn.onclick=(e)=>{
+        e.stopPropagation();
+        switchTab("snippets");
+    };
 
     tabBar.appendChild(editorTabBtn);
     tabBar.appendChild(asciiTabBtn);
     tabBar.appendChild(questionTabBtn);
+    tabBar.appendChild(snippetsTabBtn);
     header.appendChild(tabBar);
 
     /* Action buttons beside the Editor label */
@@ -419,6 +431,30 @@ function createEditor() {
 
     container.appendChild(questionTA);
 
+    /* Snippets display area */
+
+    snippetsTA=document.createElement("textarea");
+    snippetsTA.readOnly=true;
+    snippetsTA.spellcheck=false;
+
+    Object.assign(snippetsTA.style,{
+        flex:"1",
+        width:"100%",
+        resize:"none",
+        background:"#1e1e1e",
+        color:"#c9a36a",
+        border:"none",
+        outline:"none",
+        padding:"10px",
+        fontFamily:"monospace",
+        fontSize:"13px",
+        lineHeight:"18px",
+        tabSize:"4",
+        display:"none"
+    });
+
+    container.appendChild(snippetsTA);
+
     /* Load ASCII cache from localStorage */
     try{
         const cached=localStorage.getItem(ASCII_CACHE_KEY);
@@ -429,6 +465,12 @@ function createEditor() {
     try{
         const cached=localStorage.getItem(QUESTION_CACHE_KEY);
         if(cached) questionCache=JSON.parse(cached);
+    }catch(e){}
+
+    /* Load Snippets cache from localStorage */
+    try{
+        const cached=localStorage.getItem(SNIPPETS_CACHE_KEY);
+        if(cached) snippetsCache=JSON.parse(cached);
     }catch(e){}
 
     createResizeHandle();
@@ -448,6 +490,8 @@ function createEditor() {
                 asciiTA.style.display="block";
             }else if(activeTab==="question"){
                 questionTA.style.display="block";
+            }else if(activeTab==="snippets"){
+                snippetsTA.style.display="block";
             }else{
                 textarea.style.display="block";
             }
@@ -480,6 +524,7 @@ function createEditor() {
             columnContainer.style.display="none";
             asciiTA.style.display="none";
             questionTA.style.display="none";
+            snippetsTA.style.display="none";
             resizeHandle.style.display="none";
             container.style.height="36px";
 
@@ -735,11 +780,11 @@ function getEditorContent(){
 }
 
 function updateTabStyles(){
-    [editorTabBtn,asciiTabBtn,questionTabBtn].forEach(btn=>{
+    [editorTabBtn,asciiTabBtn,questionTabBtn,snippetsTabBtn].forEach(btn=>{
         btn.style.color="#999";
         btn.style.borderBottomColor="transparent";
     });
-    const active={editor:editorTabBtn,ascii:asciiTabBtn,question:questionTabBtn}[activeTab];
+    const active={editor:editorTabBtn,ascii:asciiTabBtn,question:questionTabBtn,snippets:snippetsTabBtn}[activeTab];
     if(active){
         active.style.color="white";
         active.style.borderBottomColor="#4fc3f7";
@@ -761,6 +806,7 @@ function switchTab(tabName){
 
         asciiTA.style.display="none";
         questionTA.style.display="none";
+        snippetsTA.style.display="none";
 
         if(windowMode==="maximized"){
             columnContainer.style.display="flex";
@@ -775,6 +821,7 @@ function switchTab(tabName){
     columnContainer.style.display="none";
     asciiTA.style.display="none";
     questionTA.style.display="none";
+    snippetsTA.style.display="none";
 
     if(tabName==="ascii"){
 
@@ -807,6 +854,23 @@ function switchTab(tabName){
 
         questionTA.value="Generating question...";
         generateQuestion(code,hash);
+        return;
+    }
+
+    if(tabName==="snippets"){
+
+        snippetsTA.style.display="block";
+
+        const code=getEditorContent();
+        const hash=simpleHash(code);
+
+        if(hash===snippetsCache.hash && snippetsCache.content){
+            snippetsTA.value=snippetsCache.content;
+            return;
+        }
+
+        snippetsTA.value="Generating snippets...";
+        generateSnippets(code,hash);
     }
 }
 
@@ -900,6 +964,65 @@ async function generateQuestion(code,hash){
     }catch(e){
         if(activeTab==="question"){
             questionTA.value="(Error generating question: "+e.message+")";
+        }
+    }finally{
+        waitAbortController=null;
+        hideWaitingUI();
+    }
+}
+
+async function generateSnippets(code,hash){
+
+    waitAbortController=new AbortController();
+    showWaitingUI();
+
+    const prompt="Analyze the following code and understand what problem it is solving. "+
+        "Then provide reusable, well-known algorithm and utility functions that would help solve this problem. "+
+        "These should be GENERIC helper functions that a developer would commonly memorize and reuse across many "+
+        "LeetCode problems or projects — things like BFS, DFS, Union-Find, binary search, LIS, topological sort, "+
+        "segment tree operations, GCD/LCM, prefix sums, sliding window helpers, trie operations, Dijkstra, "+
+        "Floyd-Warshall, KMP, matrix exponentiation, etc.\n\n"+
+        "IMPORTANT — Also scan the code for:\n"+
+        "1. Functions that are CALLED but never defined (missing implementations)\n"+
+        "2. Functions that have EMPTY bodies or only placeholder/stub content (e.g. TODO, throw NotImplemented, pass, return default)\n"+
+        "Provide full working implementations for ALL such functions too, placed BEFORE the generic helpers.\n\n"+
+        "Rules:\n"+
+        "- Wrap all functions inside a `class Helper` with static methods\n"+
+        "- Each function must be self-contained — only depends on its inputs, no external state\n"+
+        "- Match the programming language used in the code. If the language is unclear, default to C#\n"+
+        "- Include FULL function bodies (not stubs) — complete, working implementations\n"+
+        "- Add a brief one-line comment above each function describing what it does\n"+
+        "- For missing/empty functions found in the code, add a comment like: // [Missing from code] or // [Stub in code]\n"+
+        "- Only include generic helpers genuinely relevant to solving this type of problem\n"+
+        "- These should be the kind of well-known algorithms that experienced developers recall from memory\n"+
+        "- Enclose your ENTIRE response inside ```md and ``` so it is treated as code\n\n"+
+        "Code:\n"+code;
+
+    try{
+        const response=await sendPromptToChatGPT(prompt);
+
+        if(waitAbortController && waitAbortController.signal.aborted){
+            return;
+        }
+
+        if(response){
+            snippetsCache={hash:hash,content:response};
+
+            try{
+                localStorage.setItem(SNIPPETS_CACHE_KEY,JSON.stringify(snippetsCache));
+            }catch(e){}
+
+            if(activeTab==="snippets"){
+                snippetsTA.value=response;
+            }
+        }else{
+            if(activeTab==="snippets"){
+                snippetsTA.value="(Failed to generate snippets)";
+            }
+        }
+    }catch(e){
+        if(activeTab==="snippets"){
+            snippetsTA.value="(Error generating snippets: "+e.message+")";
         }
     }finally{
         waitAbortController=null;
