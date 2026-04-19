@@ -1327,13 +1327,23 @@ async function generateSpreview(code,hash){
         "#d6eaf8 (sky blue), #dcedc8 (pale lime). Each variable gets ONE consistent color across ALL its "+
         "occurrences throughout the entire code — not just at declaration but EVERY usage. "+
         "Limit to 6-8 most important variables to avoid visual clutter.\n"+
+        "Additionally, among those important variables, identify the ones that hold CORE algorithmic data structures "+
+        "— the ones driving the algorithm's main logic (e.g. pq/priorityQueue in Dijkstra, visited/seen HashSet, "+
+        "dp array, stack in DFS, queue in BFS, memo cache, adjacency list, tree node pointers, linked list head/curr). "+
+        "Render these variables in BOLD with a slightly darker/richer background version of their assigned color. "+
+        "This makes them instantly stand out as the 'engine' variables of the algorithm.\n"+
         "5. Use a monospace font (Consolas, monospace), line numbers in a gutter column, and comfortable line spacing (1.5)\n"+
         "6. Detect the programming language automatically\n"+
         "7. CRITICAL: Preserve ALL indentation exactly. Use a <pre> element with white-space:pre. "+
         "Use a <table> layout where column 1 is the line number (right-aligned, gray, padding-right:1em) "+
         "and column 2 is the code line inside a <pre> with margin:0 and white-space:pre. "+
         "Do NOT trim or collapse any leading spaces or tabs.\n"+
-        "8. Respond ONLY with the complete HTML document, nothing else — no explanations, no markdown fences\n\n"+
+        "8. CRITICAL: You MUST include EVERY SINGLE LINE of the source code in the HTML output — from the very first "+
+        "line to the very last line. Do NOT truncate, summarize, skip, or abbreviate ANY part of the code. "+
+        "If the code has multiple functions or classes, ALL of them must appear in full. "+
+        "The HTML line count must match the source code line count exactly. Do NOT add comments like "+
+        "'// rest of code...' or '// similar for other functions'. Output the COMPLETE code.\n"+
+        "9. Respond ONLY with the complete HTML document, nothing else — no explanations, no markdown fences\n\n"+
         "Code:\n"+code;
 
     try{
