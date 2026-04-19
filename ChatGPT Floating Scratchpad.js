@@ -47,6 +47,14 @@ let snippetsTA;                  // read-only textarea for snippets display
 let snippetsCache = { hash: null, content: "" };
 const SNIPPETS_CACHE_KEY = "tm_snippets_cache";
 
+/* Per-tab cursor and scroll position */
+const tabState = {
+    editor:   { scrollTop:0, selStart:0, selEnd:0 },
+    ascii:    { scrollTop:0, selStart:0, selEnd:0 },
+    question: { scrollTop:0, selStart:0, selEnd:0 },
+    snippets: { scrollTop:0, selStart:0, selEnd:0 }
+};
+
 /* ------------------------------- */
 /* Editor Creation */
 /* ------------------------------- */
@@ -799,9 +807,39 @@ function updateTabStyles(){
     }
 }
 
+function getTabTA(tab){
+    if(tab==="ascii") return asciiTA;
+    if(tab==="question") return questionTA;
+    if(tab==="snippets") return snippetsTA;
+    return textarea;
+}
+
+function saveTabState(tab){
+    const ta=getTabTA(tab);
+    if(!ta) return;
+    tabState[tab]={
+        scrollTop:ta.scrollTop,
+        selStart:ta.selectionStart,
+        selEnd:ta.selectionEnd
+    };
+}
+
+function restoreTabState(tab){
+    const ta=getTabTA(tab);
+    if(!ta) return;
+    const s=tabState[tab];
+    ta.scrollTop=s.scrollTop;
+    ta.selectionStart=s.selStart;
+    ta.selectionEnd=s.selEnd;
+}
+
 function switchTab(tabName){
 
     if(tabName===activeTab) return;
+
+    /* Save outgoing tab state */
+    saveTabState(activeTab);
+
     activeTab=tabName;
     updateTabStyles();
 
@@ -819,9 +857,11 @@ function switchTab(tabName){
         if(windowMode==="maximized"){
             columnContainer.style.display="flex";
             (lastFocusedTA||leftTA).focus();
+            restoreTabState("editor");
         }else{
             textarea.style.display="block";
             textarea.focus();
+            restoreTabState("editor");
         }
         return;
     }
@@ -843,6 +883,7 @@ function switchTab(tabName){
 
         if(hash===asciiCache.hash && asciiCache.content){
             asciiTA.value=asciiCache.content;
+            restoreTabState("ascii");
             return;
         }
 
@@ -861,6 +902,7 @@ function switchTab(tabName){
 
         if(hash===questionCache.hash && questionCache.content){
             questionTA.value=questionCache.content;
+            restoreTabState("question");
             return;
         }
 
@@ -879,6 +921,7 @@ function switchTab(tabName){
 
         if(hash===snippetsCache.hash && snippetsCache.content){
             snippetsTA.value=snippetsCache.content;
+            restoreTabState("snippets");
             return;
         }
 
