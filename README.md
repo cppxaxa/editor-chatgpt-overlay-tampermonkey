@@ -12,18 +12,23 @@ A Tampermonkey userscript that adds a floating, resizable text editor overlay to
 - **Dark Theme** — Matches ChatGPT's aesthetic with a monospace code-friendly font
 - **Window Controls** — Minimize, maximize, and close buttons just like a real window
 - **Two-Column Layout** — When maximized, text flows into two side-by-side editable columns to use widescreen space
-- **Persistent State** — Editor content, position, size, and window mode are saved across page reloads
+- **Tab System** — Five tabs: **Editor**, **Ascii design**, **Question**, **Snippets**, and **S-Preview** — switch with `Alt+1` through `Alt+5`
+- **Auto-Generated Tabs** — Ascii design, Snippets, and S-Preview auto-generate from your code on tab switch; Question tab generates on demand via `Alt+R`
+- **S-Preview** — Syntax-highlighted HTML preview of your code rendered in an isolated iframe with IDE-quality per-variable pastel coloring
+- **Smart Caching** — Generated tab content is cached by code hash (djb2); tabs only regenerate when your code actually changes
+- **Undo/Redo** — `Ctrl+Z` / `Ctrl+Y` with an in-memory stack (up to 200 entries) and debounced input capture
+- **Persistent State** — Editor content, position, size, window mode, and per-tab cursor/scroll positions are saved across page reloads
 - **Inline Commands** — `/p` (contextual prompt) and `/r` (raw prompt) commands to interact with ChatGPT directly from the editor
 - **Code Check with Markers** — Review your code via ChatGPT; issues are marked with ⭐ at the exact position in the editor
 - **Smart Indentation** — Auto-indent on Enter, Tab inserts 4 spaces, Shift+Tab removes indentation
-- **Title Bar Buttons** — "Command" and "Check" buttons in the header for mouse-driven access
+- **Title Bar Buttons** — "↻ Regenerate", "Command", "Check", and "GitHub" buttons in the header for mouse-driven access
 - **Waiting UI** — Spinner and cancel button in the titlebar while waiting for ChatGPT responses
 
 ## Installation
 
 1. Install the [Tampermonkey](https://www.tampermonkey.net/) browser extension
 2. Click **Create a new script** in the Tampermonkey dashboard
-3. Copy and paste the contents of [`ChatGPT Floating Scratchpad.js`](ChatGPT%20Floating%20Scratchpad.js) into the editor
+3. Copy and paste the contents of [`ChatGPT Floating Scratchpad.js`](ChatGPT%20Floating%20Scratchpad.js) into the editor (single file, no dependencies)
 4. Save the script (<kbd>Ctrl</kbd>+<kbd>S</kbd>)
 5. Navigate to [chatgpt.com](https://chatgpt.com) — you'll see a small **"E"** button in the bottom-left corner
 
@@ -178,10 +183,28 @@ Two action buttons sit beside the "Editor" label in the title bar:
 
 | Button | Action |
 |--------|--------|
+| **↻ Regenerate** | Clears the cache and regenerates the current tab's content — same as <kbd>Alt</kbd>+<kbd>R</kbd> |
 | **Command** | Executes the current line — same as <kbd>Alt</kbd>+<kbd>I</kbd> |
 | **Check** | Runs code check — same as <kbd>Alt</kbd>+<kbd>C</kbd> |
+| **GitHub** | Opens the project's GitHub repository |
 
 These work even after clicking away from the textarea — the editor remembers which textarea was last focused.
+
+---
+
+### Tab System
+
+The editor has five tabs, switchable via <kbd>Alt</kbd>+<kbd>1</kbd> through <kbd>Alt</kbd>+<kbd>5</kbd>:
+
+| Tab | Auto-generates? | Description |
+|-----|-----------------|-------------|
+| **Editor** (<kbd>Alt</kbd>+<kbd>1</kbd>) | — | Main code editor. Supports maximized two-column layout. |
+| **Ascii design** (<kbd>Alt</kbd>+<kbd>2</kbd>) | Yes | Auto-generates an ASCII architecture diagram from your code on tab switch. Read-only. |
+| **Question** (<kbd>Alt</kbd>+<kbd>3</kbd>) | No | Shows cached content or prompts you to press <kbd>Alt</kbd>+<kbd>R</kbd> to generate. Read-only. |
+| **Snippets** (<kbd>Alt</kbd>+<kbd>4</kbd>) | Yes | Generates missing/stub function implementations and generic algorithm helpers in a `class Helper`. Editable for cursor/copy convenience. |
+| **S-Preview** (<kbd>Alt</kbd>+<kbd>5</kbd>) | Yes | Syntax-highlighted HTML preview in an iframe with IDE-quality per-variable pastel coloring and WCAG AA accessible palette. |
+
+Each generated tab caches its result by code hash (djb2). Content only regenerates when your code changes. Press <kbd>Alt</kbd>+<kbd>R</kbd> to force regeneration of the current tab. Per-tab cursor and scroll positions are preserved when switching.
 
 ---
 
@@ -209,6 +232,10 @@ ChatGPT sees the full class context and generates a method that fits.
 |----------|---------|--------|
 | <kbd>Alt</kbd>+<kbd>I</kbd> | Editor focused | Execute current line (`/p` contextual prompt, `/r` raw prompt, or alert) |
 | <kbd>Alt</kbd>+<kbd>C</kbd> | Editor focused | Send editor content for code review with ⭐ markers |
+| <kbd>Alt</kbd>+<kbd>R</kbd> | Any tab | Regenerate current tab (clears cache first) |
+| <kbd>Alt</kbd>+<kbd>1</kbd>–<kbd>5</kbd> | Any | Switch tabs: Editor, Ascii design, Question, Snippets, S-Preview |
+| <kbd>Ctrl</kbd>+<kbd>Z</kbd> | Editor tab | Undo |
+| <kbd>Ctrl</kbd>+<kbd>Y</kbd> | Editor tab | Redo |
 | <kbd>Tab</kbd> | Editor focused | Insert 4 spaces |
 | <kbd>Shift</kbd>+<kbd>Tab</kbd> | Editor focused | Remove up to 4 leading spaces from the current line |
 | <kbd>Enter</kbd> | Editor focused | New line with auto-indent matching the current line |
@@ -229,11 +256,16 @@ All editor state (content, position, size, window mode) is persisted in `localSt
 
 ## Technical Details
 
-- **Single file** — No dependencies, no build step, no frameworks
+- **Single file** — No dependencies, no build step, no frameworks (~2400 lines)
 - **Runtime** — Executes at `document-idle` via Tampermonkey
-- **Storage** — Uses `localStorage` (`tm_editor_content` for text, `tm_editor_window_state` for window state)
+- **Storage** — Uses `localStorage` for editor content, window state, and per-tab caches:
+  - `tm_editor_content` — Editor text
+  - `tm_editor_window_state` — Window geometry, mode, previousBounds
+  - `tm_ascii_cache`, `tm_question_cache`, `tm_snippets_cache`, `tm_spreview_cache` — Tab caches
 - **ChatGPT Integration** — Interacts with ChatGPT's DOM using `querySelector` on `#prompt-textarea` and `[data-testid="send-button"]`
 - **Two-Column Layout** — Two real `<textarea>` elements with automatic line redistribution based on viewport height
+- **Tab Caching** — Each generated tab stores `{ hash, content }` using djb2 hashing to detect code changes and avoid redundant ChatGPT calls
+- **S-Preview** — Uses an iframe with `srcdoc` and `sandbox="allow-same-origin"` for isolated rendering
 
 ## Limitations
 
