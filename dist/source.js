@@ -1117,7 +1117,7 @@ async function generateSnippets(code, hash) {
         "- For missing/empty functions found in the code, add a comment like: // [Missing from code] or // [Stub in code]\n" +
         "- Only include generic helpers genuinely relevant to solving this type of problem\n" +
         "- These should be the kind of well-known algorithms that experienced developers recall from memory\n" +
-        "- Enclose your ENTIRE response inside ```md and ``` so it is treated as code\n\n" +
+        "- Enclose your ENTIRE response inside ```cs and ``` so it is treated as code\n\n" +
         "Code:\n" + code;
 
     try {

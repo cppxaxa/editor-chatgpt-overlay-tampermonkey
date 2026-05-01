@@ -15,6 +15,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
@@ -23,6 +24,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"unicode/utf16"
 )
 
 const (
@@ -133,10 +135,19 @@ func orderedFiles() ([]string, error) {
 
 // copyToClipboard pipes data to the platform's clipboard tool.
 // Windows: clip.exe.  macOS: pbcopy.  Linux: wl-copy or xclip or xsel.
+//
+// On Windows, clip.exe reads stdin using the system ANSI codepage (typically
+// CP1252), which mangles non-ASCII UTF-8 sequences (e.g. ↻ — □ × ⟳ ⭐). To
+// preserve them, we encode the payload as UTF-16LE with a BOM, which clip.exe
+// detects and treats as Unicode.
 func copyToClipboard(data []byte) error {
 	cmd, err := clipboardCmd()
 	if err != nil {
 		return err
+	}
+	payload := data
+	if runtime.GOOS == "windows" {
+		payload = encodeUTF16LEWithBOM(data)
 	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -145,13 +156,28 @@ func copyToClipboard(data []byte) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	if _, err := io.Copy(stdin, bytes.NewReader(data)); err != nil {
+	if _, err := io.Copy(stdin, bytes.NewReader(payload)); err != nil {
 		stdin.Close()
 		_ = cmd.Wait()
 		return err
 	}
 	stdin.Close()
 	return cmd.Wait()
+}
+
+// encodeUTF16LEWithBOM converts UTF-8 input to UTF-16LE bytes prefixed with
+// the little-endian BOM (0xFF 0xFE).
+func encodeUTF16LEWithBOM(data []byte) []byte {
+	runes := []rune(string(data))
+	u16 := utf16.Encode(runes)
+
+	out := make([]byte, 2+2*len(u16))
+	out[0] = 0xFF
+	out[1] = 0xFE
+	for i, r := range u16 {
+		binary.LittleEndian.PutUint16(out[2+2*i:], r)
+	}
+	return out
 }
 
 func clipboardCmd() (*exec.Cmd, error) {
