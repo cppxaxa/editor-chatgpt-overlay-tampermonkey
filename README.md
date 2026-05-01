@@ -27,10 +27,13 @@ A Tampermonkey userscript that adds a floating, resizable text editor overlay to
 ## Installation
 
 1. Install the [Tampermonkey](https://www.tampermonkey.net/) browser extension
-2. Click **Create a new script** in the Tampermonkey dashboard
-3. Copy and paste the contents of [`ChatGPT Floating Scratchpad.js`](ChatGPT%20Floating%20Scratchpad.js) into the editor (single file, no dependencies)
-4. Save the script (<kbd>Ctrl</kbd>+<kbd>S</kbd>)
-5. Navigate to [chatgpt.com](https://chatgpt.com) — you'll see a small **"E"** button in the bottom-left corner
+2. Get the concatenated script — either:
+   - Build it locally: run `./build.sh` (Linux/macOS/Git Bash) or `build.cmd` (Windows). The script is written to `dist/source.js` and copied to your clipboard. See [Building from source](#building-from-source) for details.
+   - Or paste the prebuilt [`dist/source.js`](dist/source.js) directly.
+3. Click **Create a new script** in the Tampermonkey dashboard
+4. Paste the script contents into the editor
+5. Save the script (<kbd>Ctrl</kbd>+<kbd>S</kbd>)
+6. Navigate to [chatgpt.com](https://chatgpt.com) — you'll see a small **"E"** button in the bottom-left corner
 
 ## Quickstart
 
@@ -254,9 +257,57 @@ The script injects a floating editor UI into ChatGPT's page. When you trigger a 
 
 All editor state (content, position, size, window mode) is persisted in `localStorage`.
 
+## Building from source
+
+The script is split into per-component files under [`src/`](src) and concatenated by a small Go-based build tool. There are **no JavaScript dependencies** — Go is the only build-time requirement (install from [go.dev/dl](https://go.dev/dl/)).
+
+```
+./build.sh        # Linux / macOS / Git Bash
+build.cmd         # Windows
+go run build.go   # any OS, if Go is on PATH
+```
+
+The build tool:
+
+1. Concatenates `src/header.js` → `src/framework.js` → `src/component_*.js` (sorted) → `src/footer.js` into a single IIFE.
+2. Writes the result to `dist/source.js`.
+3. Copies the same content to the system clipboard (via `clip.exe` on Windows, `pbcopy` on macOS, `wl-copy`/`xclip`/`xsel` on Linux).
+
+`node --check dist/source.js` is a quick syntax sanity-check before pasting into Tampermonkey.
+
+### Repository layout
+
+```
+src/
+  header.js                   # ==UserScript== banner + IIFE open
+  framework.js                # global state + framework_init()
+  component_launcher.js       # the "E" button
+  component_window.js         # floating window: header, drag, resize, min/max/close, master createEditor()
+  component_editor.js         # shared editor keydown (auto-indent, Tab, Ctrl+Z/Y dispatch)
+  component_columns.js        # two-column layout for maximized mode
+  component_tabbar.js         # tab switching + per-tab cursor/scroll state
+  component_actionbuttons.js  # (placeholder)
+  component_undoredo.js       # custom undo/redo stack
+  component_waitingui.js      # spinner + Cancel button
+  component_dialog.js         # modal result dialog
+  component_linecommand.js    # /p, /r commands + global hotkey dispatcher
+  component_codecheck.js      # Alt+C review with ⭐ markers
+  component_tab_ascii.js      # ASCII diagram tab
+  component_tab_question.js   # Question tab
+  component_tab_snippets.js   # Snippets tab
+  component_tab_spreview.js   # S-Preview tab (iframe + srcdoc)
+  component_chatgpt.js        # ChatGPT DOM automation
+  footer.js                   # framework_init() + IIFE close
+build.go                      # concatenator (Go stdlib only)
+build.sh, build.cmd           # one-line wrappers
+dist/source.js                # generated — the file you paste into Tampermonkey
+```
+
+`ChatGPT Floating Scratchpad.js` at the repo root is the **legacy monolith** kept for reference. Edit files under `src/` instead and rebuild.
+
 ## Technical Details
 
-- **Single file** — No dependencies, no build step, no frameworks (~2400 lines)
+- **Vanilla JS** — No runtime dependencies, no frameworks, ~2200 lines after concatenation
 - **Runtime** — Executes at `document-idle` via Tampermonkey
 - **Storage** — Uses `localStorage` for editor content, window state, and per-tab caches:
   - `tm_editor_content` — Editor text

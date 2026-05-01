@@ -1,7 +1,19 @@
 # Ignore everything
 *
 
-# Allow these files
+# Allow list
 !.gitignore
 !README.md
-!ChatGPT Floating Scratchpad.js
+!LICENSE
+!build.cmd
+!build.sh
+!build.go
+!CLAUDE.md
+
+# Allow imgs, src, dist folders
+!imgs/
+!imgs/**
+!src/
+!src/**
+!dist/
+!dist/**
