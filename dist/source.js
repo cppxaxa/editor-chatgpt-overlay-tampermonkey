@@ -100,6 +100,8 @@ function framework_init() {
     const tmStyle = document.createElement("style");
     tmStyle.textContent = `@keyframes tm-spin{to{transform:rotate(360deg)}}`;
     document.head.appendChild(tmStyle);
+
+    handle_kiosk();
 }
 
 // ===== src/component_actionbuttons.js =====
@@ -189,6 +191,28 @@ function extractCleanText(messageEl) {
 
     const clone = messageEl.cloneNode(true);
 
+    /* Walk a subtree and concatenate text nodes, converting <br> to "\n".
+       Necessary because ChatGPT's rendered code blocks often use <br> as the
+       only line separator inside <pre><code><span>line</span><br>… and
+       textContent silently drops <br>, collapsing the block to one line. */
+    function extractTextWithBR(root) {
+        let out = "";
+        const walk = (node) => {
+            if (node.nodeType === 3) {           // TEXT_NODE
+                out += node.nodeValue;
+                return;
+            }
+            if (node.nodeType !== 1) return;     // anything else: skip
+            if (node.nodeName === "BR") {
+                out += "\n";
+                return;
+            }
+            node.childNodes.forEach(walk);
+        };
+        walk(root);
+        return out;
+    }
+
     clone.querySelectorAll("pre div.sticky").forEach(el => el.remove());
     clone.querySelectorAll('button[aria-label="Copy"]').forEach(el => el.remove());
 
@@ -199,32 +223,58 @@ function extractCleanText(messageEl) {
         }
     });
 
-    /* Code blocks use CodeMirror (cm-content) with <br> for line breaks.
-       innerText can lose these breaks, so we extract code blocks separately. */
-    const codeBlocks = clone.querySelectorAll(".cm-content");
+    /* Code blocks arrive in any of these shapes:
+
+         (a) <pre><code>…<br>…</code></pre>                    (markdown render)
+         (b) <div class="cm-content">…<br>…</div>              (CodeMirror, old)
+         (c) <div class="cm-content"><div class="cm-line">…    (CodeMirror, new)
+
+       The unifying primitive is extractTextWithBR — text nodes pass through,
+       <br> becomes "\n", everything else recurses. This handles all three
+       shapes uniformly and avoids relying on innerText/textContent quirks
+       (textContent drops <br>; innerText behaviour depends on CSS context
+       and is unreliable inside Tampermonkey's sandbox).
+
+       Process the most specific selectors first so a single block isn't
+       captured twice. */
+
     const codePlaceholders = [];
 
-    codeBlocks.forEach(cm => {
-
-        const lines = [];
-        let currentLine = "";
-
-        cm.childNodes.forEach(node => {
-            if (node.nodeName === "BR") {
-                lines.push(currentLine);
-                currentLine = "";
-            } else {
-                currentLine += node.textContent;
-            }
-        });
-
-        if (currentLine) lines.push(currentLine);
-
-        const codeText = lines.join("\n");
+    function captureCode(el, text) {
         const placeholder = "__CODE_BLOCK_" + codePlaceholders.length + "__";
-        codePlaceholders.push(codeText);
+        codePlaceholders.push(text);
+        el.textContent = placeholder;
+    }
 
-        cm.textContent = placeholder;
+    /* (b)/(c): CodeMirror containers. */
+    clone.querySelectorAll(".cm-content").forEach(cm => {
+
+        /* Newer CodeMirror layout: each line is a div.cm-line with no <br>
+           between lines. Join their textContent with "\n" explicitly. */
+        const cmLines = cm.querySelectorAll(".cm-line");
+        if (cmLines.length > 0) {
+            const lines = [];
+            cmLines.forEach(div => lines.push(div.textContent));
+            captureCode(cm, lines.join("\n"));
+            return;
+        }
+
+        /* Older CodeMirror layout (or any other shape) — let the BR walker
+           handle it. */
+        captureCode(cm, extractTextWithBR(cm));
+    });
+
+    /* (a): Markdown <pre><code>. */
+    clone.querySelectorAll("pre").forEach(pre => {
+
+        /* Skip <pre> already replaced via the .cm-content pass above. */
+        if (/__CODE_BLOCK_\d+__/.test(pre.textContent)) return;
+
+        const code = pre.querySelector("code") || pre;
+        const text = extractTextWithBR(code);
+        if (!text) return;
+
+        captureCode(pre, text);
     });
 
     let result = clone.innerText.trim();
@@ -1117,7 +1167,7 @@ async function generateSnippets(code, hash) {
         "- For missing/empty functions found in the code, add a comment like: // [Missing from code] or // [Stub in code]\n" +
         "- Only include generic helpers genuinely relevant to solving this type of problem\n" +
         "- These should be the kind of well-known algorithms that experienced developers recall from memory\n" +
-        "- Enclose your ENTIRE response inside ```cs and ``` so it is treated as code\n\n" +
+        "- Enclose your ENTIRE response inside ```md and ``` so it is treated as code\n\n" +
         "Code:\n" + code;
 
     try {
@@ -1380,8 +1430,13 @@ function switchTab(tabName) {
             return;
         }
 
-        asciiTA.value = "Generating ASCII diagram...";
-        generateAsciiDiagram(code, hash);
+        /* Ascii design does NOT auto-regenerate. If the cache is stale (code changed)
+           or missing, prompt the user to explicitly regenerate via Alt+R / ↻. */
+        if (asciiCache.content) {
+            asciiTA.value = "(Code has changed. Press ↻ or Alt+R to regenerate ASCII diagram)";
+        } else {
+            asciiTA.value = "(Press ↻ or Alt+R to generate ASCII diagram)";
+        }
         return;
     }
 
@@ -1404,17 +1459,15 @@ function switchTab(tabName) {
         snippetsTA.style.display = "block";
         snippetsTA.focus();
 
-        const code = getEditorContent();
-        const hash = simpleHash(code);
-
-        if (hash === snippetsCache.hash && snippetsCache.content) {
+        /* Show cached content if available, otherwise prompt user to regenerate.
+           Snippets does NOT auto-regenerate on code change — explicit Alt+R only. */
+        if (snippetsCache.content) {
             snippetsTA.value = snippetsCache.content;
             restoreTabState("snippets");
-            return;
+        } else {
+            snippetsTA.value = "(Press ↻ or Alt+R to generate snippets)";
         }
-
-        snippetsTA.value = "Generating snippets...";
-        generateSnippets(code, hash);
+        return;
     }
 
     if (tabName === "spreview") {
@@ -1430,8 +1483,13 @@ function switchTab(tabName) {
             return;
         }
 
-        setSpreviewContent("<p style='font-family:monospace;padding:20px;color:#555'>Generating preview...</p>");
-        generateSpreview(code, hash);
+        /* S-Preview does NOT auto-regenerate. If the cache is stale (code changed)
+           or missing, prompt the user to explicitly regenerate via Alt+R / ↻. */
+        if (spreviewCache.content) {
+            setSpreviewContent("<p style='font-family:monospace;padding:20px;color:#555'>(Code has changed. Press ↻ or Alt+R to regenerate preview)</p>");
+        } else {
+            setSpreviewContent("<p style='font-family:monospace;padding:20px;color:#555'>(Press ↻ or Alt+R to generate preview)</p>");
+        }
     }
 }
 
@@ -2212,6 +2270,66 @@ function restoreEditorState() {
     }
 
     return true;
+}
+
+// ===== src/framework_kiosk.js =====
+// -----------------------------------------------------------------------------
+// framework_kiosk.js — kiosk-mode bootstrap. Reads localStorage["kiosk"]
+// (populated by run_app.go from appsettings.json "properties") and, if set
+// to the string "true", auto-opens the floating editor in maximized mode so
+// the app behaves like a kiosk-style single-window experience.
+// -----------------------------------------------------------------------------
+
+function handle_kiosk() {
+    try {
+        if (localStorage.getItem("kiosk") === "true") {
+            component_kiosk();
+        }
+    } catch (e) {
+        // localStorage may be unavailable in restricted contexts; ignore.
+    }
+}
+
+function component_kiosk() {
+
+    /* 1. Open the editor dialog (lazy-create on first use, just like the
+          launcher button does). */
+    if (!container) createEditor();
+    container.style.display = "flex";
+
+    /* 2. Maximize it if it isn't already. The maximize button is not held
+          in a global ref, so locate it by text content within the header.
+          Falls back to inlining the same state transitions performed by
+          maxBtn.onclick in component_window.js if the button can't be
+          found (e.g. future markup changes). */
+    if (windowMode !== "maximized") {
+        const maxBtn = container.querySelector
+            ? Array.from(container.querySelectorAll("button"))
+                .find(b => b.textContent === "□")
+            : null;
+
+        if (maxBtn) {
+            maxBtn.click();
+        } else {
+            previousBounds = {
+                left: container.style.left,
+                top: container.style.top,
+                width: container.style.width,
+                height: container.style.height
+            };
+            container.style.left = "0";
+            container.style.top = "0";
+            container.style.width = "100vw";
+            container.style.height = "100vh";
+            if (resizeHandle) resizeHandle.style.display = "none";
+            windowMode = "maximized";
+            if (activeTab === "editor") enterMaximizedColumnLayout();
+        }
+    }
+
+    /* If we ended up maximized (just now or already), re-split the columns
+       since the launcher path does the same when restoring. */
+    if (windowMode === "maximized") redistributeColumns();
 }
 
 // ===== src/footer.js =====

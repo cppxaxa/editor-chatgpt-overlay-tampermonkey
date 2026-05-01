@@ -145,8 +145,13 @@ function switchTab(tabName) {
             return;
         }
 
-        asciiTA.value = "Generating ASCII diagram...";
-        generateAsciiDiagram(code, hash);
+        /* Ascii design does NOT auto-regenerate. If the cache is stale (code changed)
+           or missing, prompt the user to explicitly regenerate via Alt+R / ↻. */
+        if (asciiCache.content) {
+            asciiTA.value = "(Code has changed. Press ↻ or Alt+R to regenerate ASCII diagram)";
+        } else {
+            asciiTA.value = "(Press ↻ or Alt+R to generate ASCII diagram)";
+        }
         return;
     }
 
@@ -169,17 +174,15 @@ function switchTab(tabName) {
         snippetsTA.style.display = "block";
         snippetsTA.focus();
 
-        const code = getEditorContent();
-        const hash = simpleHash(code);
-
-        if (hash === snippetsCache.hash && snippetsCache.content) {
+        /* Show cached content if available, otherwise prompt user to regenerate.
+           Snippets does NOT auto-regenerate on code change — explicit Alt+R only. */
+        if (snippetsCache.content) {
             snippetsTA.value = snippetsCache.content;
             restoreTabState("snippets");
-            return;
+        } else {
+            snippetsTA.value = "(Press ↻ or Alt+R to generate snippets)";
         }
-
-        snippetsTA.value = "Generating snippets...";
-        generateSnippets(code, hash);
+        return;
     }
 
     if (tabName === "spreview") {
@@ -195,7 +198,12 @@ function switchTab(tabName) {
             return;
         }
 
-        setSpreviewContent("<p style='font-family:monospace;padding:20px;color:#555'>Generating preview...</p>");
-        generateSpreview(code, hash);
+        /* S-Preview does NOT auto-regenerate. If the cache is stale (code changed)
+           or missing, prompt the user to explicitly regenerate via Alt+R / ↻. */
+        if (spreviewCache.content) {
+            setSpreviewContent("<p style='font-family:monospace;padding:20px;color:#555'>(Code has changed. Press ↻ or Alt+R to regenerate preview)</p>");
+        } else {
+            setSpreviewContent("<p style='font-family:monospace;padding:20px;color:#555'>(Press ↻ or Alt+R to generate preview)</p>");
+        }
     }
 }

@@ -4,11 +4,15 @@
 # Allow list
 !.gitignore
 !README.md
+!CLAUDE.md
 !LICENSE
 !build.cmd
 !build.sh
 !build.go
-!CLAUDE.md
+!run_app.cmd
+!run_app.sh
+!run_app.go
+!appsettings.json
 
 # Allow imgs, src, dist folders
 !imgs/

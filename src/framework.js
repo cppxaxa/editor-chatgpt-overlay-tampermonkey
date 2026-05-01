@@ -75,4 +75,6 @@ function framework_init() {
     const tmStyle = document.createElement("style");
     tmStyle.textContent = `@keyframes tm-spin{to{transform:rotate(360deg)}}`;
     document.head.appendChild(tmStyle);
+
+    handle_kiosk();
 }

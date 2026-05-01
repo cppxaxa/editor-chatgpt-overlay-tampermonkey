@@ -74,6 +74,28 @@ function extractCleanText(messageEl) {
 
     const clone = messageEl.cloneNode(true);
 
+    /* Walk a subtree and concatenate text nodes, converting <br> to "\n".
+       Necessary because ChatGPT's rendered code blocks often use <br> as the
+       only line separator inside <pre><code><span>line</span><br>… and
+       textContent silently drops <br>, collapsing the block to one line. */
+    function extractTextWithBR(root) {
+        let out = "";
+        const walk = (node) => {
+            if (node.nodeType === 3) {           // TEXT_NODE
+                out += node.nodeValue;
+                return;
+            }
+            if (node.nodeType !== 1) return;     // anything else: skip
+            if (node.nodeName === "BR") {
+                out += "\n";
+                return;
+            }
+            node.childNodes.forEach(walk);
+        };
+        walk(root);
+        return out;
+    }
+
     clone.querySelectorAll("pre div.sticky").forEach(el => el.remove());
     clone.querySelectorAll('button[aria-label="Copy"]').forEach(el => el.remove());
 
@@ -84,32 +106,58 @@ function extractCleanText(messageEl) {
         }
     });
 
-    /* Code blocks use CodeMirror (cm-content) with <br> for line breaks.
-       innerText can lose these breaks, so we extract code blocks separately. */
-    const codeBlocks = clone.querySelectorAll(".cm-content");
+    /* Code blocks arrive in any of these shapes:
+
+         (a) <pre><code>…<br>…</code></pre>                    (markdown render)
+         (b) <div class="cm-content">…<br>…</div>              (CodeMirror, old)
+         (c) <div class="cm-content"><div class="cm-line">…    (CodeMirror, new)
+
+       The unifying primitive is extractTextWithBR — text nodes pass through,
+       <br> becomes "\n", everything else recurses. This handles all three
+       shapes uniformly and avoids relying on innerText/textContent quirks
+       (textContent drops <br>; innerText behaviour depends on CSS context
+       and is unreliable inside Tampermonkey's sandbox).
+
+       Process the most specific selectors first so a single block isn't
+       captured twice. */
+
     const codePlaceholders = [];
 
-    codeBlocks.forEach(cm => {
-
-        const lines = [];
-        let currentLine = "";
-
-        cm.childNodes.forEach(node => {
-            if (node.nodeName === "BR") {
-                lines.push(currentLine);
-                currentLine = "";
-            } else {
-                currentLine += node.textContent;
-            }
-        });
-
-        if (currentLine) lines.push(currentLine);
-
-        const codeText = lines.join("\n");
+    function captureCode(el, text) {
         const placeholder = "__CODE_BLOCK_" + codePlaceholders.length + "__";
-        codePlaceholders.push(codeText);
+        codePlaceholders.push(text);
+        el.textContent = placeholder;
+    }
 
-        cm.textContent = placeholder;
+    /* (b)/(c): CodeMirror containers. */
+    clone.querySelectorAll(".cm-content").forEach(cm => {
+
+        /* Newer CodeMirror layout: each line is a div.cm-line with no <br>
+           between lines. Join their textContent with "\n" explicitly. */
+        const cmLines = cm.querySelectorAll(".cm-line");
+        if (cmLines.length > 0) {
+            const lines = [];
+            cmLines.forEach(div => lines.push(div.textContent));
+            captureCode(cm, lines.join("\n"));
+            return;
+        }
+
+        /* Older CodeMirror layout (or any other shape) — let the BR walker
+           handle it. */
+        captureCode(cm, extractTextWithBR(cm));
+    });
+
+    /* (a): Markdown <pre><code>. */
+    clone.querySelectorAll("pre").forEach(pre => {
+
+        /* Skip <pre> already replaced via the .cm-content pass above. */
+        if (/__CODE_BLOCK_\d+__/.test(pre.textContent)) return;
+
+        const code = pre.querySelector("code") || pre;
+        const text = extractTextWithBR(code);
+        if (!text) return;
+
+        captureCode(pre, text);
     });
 
     let result = clone.innerText.trim();
