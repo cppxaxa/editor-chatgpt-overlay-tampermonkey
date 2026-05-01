@@ -13,7 +13,7 @@ A Tampermonkey userscript that adds a floating, resizable text editor overlay to
 - **Window Controls** — Minimize, maximize, and close buttons just like a real window
 - **Two-Column Layout** — When maximized, text flows into two side-by-side editable columns to use widescreen space
 - **Tab System** — Five tabs: **Editor**, **Ascii design**, **Question**, **Snippets**, and **S-Preview** — switch with `Alt+1` through `Alt+5`
-- **Auto-Generated Tabs** — Ascii design, Snippets, and S-Preview auto-generate from your code on tab switch; Question tab generates on demand via `Alt+R`
+- **Auto-Generated Tabs** — Generated tabs (Ascii design, Question, Snippets, S-Preview) are loaded from cache on tab switch and only regenerated explicitly via `Alt+R` / the ↻ button
 - **S-Preview** — Syntax-highlighted HTML preview of your code rendered in an isolated iframe with IDE-quality per-variable pastel coloring
 - **Smart Caching** — Generated tab content is cached by code hash (djb2); tabs only regenerate when your code actually changes
 - **Undo/Redo** — `Ctrl+Z` / `Ctrl+Y` with an in-memory stack (up to 200 entries) and debounced input capture
@@ -202,12 +202,12 @@ The editor has five tabs, switchable via <kbd>Alt</kbd>+<kbd>1</kbd> through <kb
 | Tab | Auto-generates? | Description |
 |-----|-----------------|-------------|
 | **Editor** (<kbd>Alt</kbd>+<kbd>1</kbd>) | — | Main code editor. Supports maximized two-column layout. |
-| **Ascii design** (<kbd>Alt</kbd>+<kbd>2</kbd>) | Yes | Auto-generates an ASCII architecture diagram from your code on tab switch. Read-only. |
+| **Ascii design** (<kbd>Alt</kbd>+<kbd>2</kbd>) | No | Shows cached ASCII architecture diagram, or prompts you to press <kbd>Alt</kbd>+<kbd>R</kbd> to (re)generate. Read-only. |
 | **Question** (<kbd>Alt</kbd>+<kbd>3</kbd>) | No | Shows cached content or prompts you to press <kbd>Alt</kbd>+<kbd>R</kbd> to generate. Read-only. |
-| **Snippets** (<kbd>Alt</kbd>+<kbd>4</kbd>) | Yes | Generates missing/stub function implementations and generic algorithm helpers in a `class Helper`. Editable for cursor/copy convenience. |
-| **S-Preview** (<kbd>Alt</kbd>+<kbd>5</kbd>) | Yes | Syntax-highlighted HTML preview in an iframe with IDE-quality per-variable pastel coloring and WCAG AA accessible palette. |
+| **Snippets** (<kbd>Alt</kbd>+<kbd>4</kbd>) | No | Shows cached snippets, or prompts you to press <kbd>Alt</kbd>+<kbd>R</kbd> to generate missing/stub function implementations and generic algorithm helpers in a `class Helper`. Editable for cursor/copy convenience. |
+| **S-Preview** (<kbd>Alt</kbd>+<kbd>5</kbd>) | No | Shows cached syntax-highlighted HTML preview in an iframe, or prompts you to press <kbd>Alt</kbd>+<kbd>R</kbd> to (re)generate with IDE-quality per-variable pastel coloring and WCAG AA accessible palette. |
 
-Each generated tab caches its result by code hash (djb2). Content only regenerates when your code changes. Press <kbd>Alt</kbd>+<kbd>R</kbd> to force regeneration of the current tab. Per-tab cursor and scroll positions are preserved when switching.
+Each generated tab caches its result by code hash (djb2). On tab switch, the cached content is shown if the hash still matches the current editor code; otherwise a hint is displayed prompting you to press <kbd>Alt</kbd>+<kbd>R</kbd> (or click ↻) to regenerate. No tab regenerates automatically. Per-tab cursor and scroll positions are preserved when switching.
 
 ---
 
@@ -281,6 +281,7 @@ The build tool:
 src/
   header.js                   # ==UserScript== banner + IIFE open
   framework.js                # global state + framework_init()
+  framework_kiosk.js          # kiosk-mode bootstrap (handle_kiosk / component_kiosk)
   component_launcher.js       # the "E" button
   component_window.js         # floating window: header, drag, resize, min/max/close, master createEditor()
   component_editor.js         # shared editor keydown (auto-indent, Tab, Ctrl+Z/Y dispatch)
@@ -300,10 +301,55 @@ src/
   footer.js                   # framework_init() + IIFE close
 build.go                      # concatenator (Go stdlib only)
 build.sh, build.cmd           # one-line wrappers
+run_app.go                    # standalone launcher (chrome + DevTools injection)
+appsettings.json              # config for run_app.go (chrome path/port, properties)
 dist/source.js                # generated — the file you paste into Tampermonkey
 ```
 
 `ChatGPT Floating Scratchpad.js` at the repo root is the **legacy monolith** kept for reference. Edit files under `src/` instead and rebuild.
+
+## Standalone launcher (`run_app.go`)
+
+For an automated, kiosk-style experience there is a Go launcher that:
+
+1. Reads `appsettings.json` (chrome path, debug port, properties).
+2. Launches Chrome with `--remote-debugging-port` against `chatgpt.com` using a dedicated `chrome-profile/` directory.
+3. Waits for the page to finish loading, injects a centered "booting" splash via the Chrome DevTools Protocol.
+4. Feeds every key under `properties` into `window.localStorage` over the WebSocket connection.
+5. Injects `dist/source.js` into the page.
+6. Removes the booting splash.
+
+Run it with:
+
+```
+go run run_app.go
+```
+
+### `appsettings.json`
+
+```json
+{
+  "chromepath": ["C:\\Program Files\\Google\\Chrome\\Application"],
+  "chromeport": 9222,
+  "properties": {
+    "kiosk": true
+  },
+  "app": "chrome"
+}
+```
+
+- `chromepath` — list of candidate directories (or full binary paths) — the first one that exists wins. `chrome.exe` is appended automatically on Windows; `Google Chrome` on macOS; `chrome` on Linux.
+- `chromeport` — desired DevTools port. If unbindable, an OS-assigned free port is used.
+- `properties` — arbitrary key/value pairs written into `localStorage` before `source.js` is injected. Strings are stored as-is; non-strings are JSON-encoded (booleans become `"true"`/`"false"`).
+
+### Kiosk mode (`properties.kiosk`)
+
+When `properties.kiosk` is `true`, the script's `framework_init()` calls `handle_kiosk()` (in `src/framework_kiosk.js`), which:
+
+1. Opens the floating editor automatically (no need to click the **E** launcher).
+2. Maximizes it (two-column layout) if it isn't already.
+
+This gives you a one-command launch: run `go run run_app.go` and the editor is up and ready against ChatGPT.
 
 ## Technical Details
 

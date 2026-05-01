@@ -18,10 +18,14 @@ The project is a vanilla-JS IIFE (~2200 lines) split into per-component files un
 ChatGPT Floating Scratchpad.js   # legacy monolith — kept for reference until refactor stabilises
 build.go                         # concatenator (Go stdlib only, no modules)
 build.sh / build.cmd             # one-line wrappers around `go run build.go`
+run_app.go                       # standalone launcher (chrome + DevTools injection of dist/source.js)
+appsettings.json                 # config consumed by run_app.go (chrome path, port, properties)
 dist/source.js                   # generated; the file you paste into Tampermonkey
 src/
   header.js                      # ==UserScript== banner + IIFE open + 'use strict'
   framework.js                   # global state + framework_init() bootstrap
+  framework_kiosk.js             # handle_kiosk() + component_kiosk() — auto-open + maximize when
+                                 #   localStorage["kiosk"] === "true" (set by run_app.go)
   component_launcher.js          # the floating "E" button (createLauncher)
   component_window.js            # container/header/min/max/close + drag + resize +
                                  #   geometry persistence + master createEditor() wiring
@@ -59,7 +63,7 @@ Because everything ends up inside the same IIFE, **JavaScript function-declarati
 ### Runtime architecture (within the concatenated IIFE)
 
 - **Global state** at the top of `framework.js` — DOM refs (`container`, `textarea`, `headerEl`, `columnContainer`, `leftTA`, `rightTA`, tab buttons, tab content elements), tab system vars (`activeTab`, per-tab caches), undo/redo stacks, per-tab cursor/scroll state (`tabState`).
-- **`framework_init()`** in `footer.js` calls `createLauncher() + registerLineReaderHotkey() + window.onresize + style injection`. This is the only entry point.
+- **`framework_init()`** in `footer.js` calls `createLauncher() + registerLineReaderHotkey() + window.onresize + style injection + handle_kiosk()`. This is the only entry point.
 - **`createEditor()`** in `component_window.js` is the master DOM builder — it constructs the floating window, header, tabs, action buttons, main textarea, two column textareas, ascii/question/snippets textareas, S-Preview iframe, and wires the min/max/close/drag/resize handlers. It is called lazily on first launcher click.
 - **Tab system** — five tabs (Editor, Ascii design, Question, Snippets, S-Preview). Each generated tab caches `{ hash, content }` in both memory and localStorage. `simpleHash` (djb2) detects code changes; regeneration only happens when hash differs (or explicitly via Alt+R which clears the cache first).
 - **S-Preview** uses an iframe with `srcdoc` for isolated syntax-highlighted HTML rendering. `setSpreviewContent` injects a CSS reset to preserve indentation.
@@ -81,10 +85,12 @@ Because everything ends up inside the same IIFE, **JavaScript function-declarati
 ### Tab Behavior
 
 - **Editor** — Main code editor. Supports maximized two-column layout.
-- **Ascii design** — Auto-generates ASCII architecture diagram on tab switch if code changed.
+- **Ascii design** — Does NOT auto-generate. Shows cached content (when hash matches) or prompts user to press Alt+R.
 - **Question** — Does NOT auto-generate. Shows cached content or prompts user to press Alt+R.
-- **Snippets** — Auto-generates. Editable textarea (not read-only) for cursor/copy convenience. Includes missing/stub function implementations from the code plus generic algorithm helpers in `class Helper`.
-- **S-Preview** — Auto-generates syntax-highlighted HTML in an iframe. Prompt requests IDE-quality highlighting with per-variable pastel colors, bold for core algorithmic data structure variables, WCAG AA accessible palette.
+- **Snippets** — Does NOT auto-generate. Editable textarea (not read-only) for cursor/copy convenience. When generated, includes missing/stub function implementations from the code plus generic algorithm helpers in `class Helper`.
+- **S-Preview** — Does NOT auto-generate. Shows cached syntax-highlighted HTML in an iframe (when hash matches) or prompts user to press Alt+R. Prompt requests IDE-quality highlighting with per-variable pastel colors, bold for core algorithmic data structure variables, WCAG AA accessible palette.
+
+No tab regenerates automatically on tab switch. The cached `{hash, content}` is shown when the hash still matches the current editor code; otherwise a hint message asks the user to press Alt+R / click ↻ to regenerate. Alt+R always clears the cache then calls the appropriate `generate*` function.
 
 ### Caching strategy
 
@@ -145,3 +151,42 @@ To rebuild as a native binary (optional, avoids the `go run` startup cost):
 go build -o build.exe build.go     # Windows
 go build -o build build.go          # Linux/macOS
 ```
+
+## Standalone launcher (`run_app.go`)
+
+Stdlib-only Go program that automates "open chrome → wait → inject `dist/source.js`". Reads `appsettings.json` and:
+
+1. Resolves a chrome binary from `chromepath` (each entry may be a directory or full path; platform-specific binary name is appended for directories).
+2. Picks `chromeport`, falling back to an OS-assigned free port if the configured one is unbindable.
+3. Launches chrome with `--app=https://chatgpt.com`, `--remote-debugging-port`, `--remote-allow-origins=*`, and a sandboxed `--user-data-dir=chrome-profile/`.
+4. Polls `http://localhost:<port>/json` for a `chatgpt.com` page target, fetches its `webSocketDebuggerUrl`.
+5. Waits 10s, then polls `document.readyState` until `"complete"`.
+6. Injects a centered `#tm-booting-splash` div via `Runtime.evaluate` and verifies it appears in the DOM.
+7. Calls `injectPropertiesIntoLocalStorage` — iterates every key under `appsettings.json` `properties` and sets each via `window.localStorage.setItem(key, value)`. Strings are stored as raw text; non-strings are JSON-encoded.
+8. Sends `dist/source.js` via a single `Runtime.evaluate` over a minimal RFC 6455 WebSocket client (no external deps).
+9. Removes the booting splash.
+
+The minimal WebSocket client supports only what's needed: TCP `ws://`, single masked text frames, ping→pong, no fragmentation, no `wss`/TLS.
+
+### `appsettings.json`
+
+```json
+{
+  "chromepath": ["C:\\Program Files\\Google\\Chrome\\Application"],
+  "chromeport": 9222,
+  "properties": { "kiosk": true },
+  "app": "chrome"
+}
+```
+
+`properties` is a generic map — anything you put here ends up in the page's `localStorage` before `source.js` runs, so the userscript can read user-configured behaviour at boot time.
+
+### Kiosk mode
+
+`framework_init()` calls `handle_kiosk()` (in `src/framework_kiosk.js`) at the end of bootstrap. If `localStorage.getItem("kiosk") === "true"` it runs `component_kiosk()` which:
+
+- Lazy-creates the editor via `createEditor()` and shows the container (same as the launcher button).
+- Maximizes the window if it isn't already, by clicking the `□` button (located by text-content scan within `container`); falls back to inlining the same state transitions as `maxBtn.onclick` if the button isn't found.
+- Calls `redistributeColumns()` (the launcher does the same when restoring a maximized session — splitting columns requires a non-zero `offsetHeight`).
+
+Adding more boot-time behaviour controlled by `appsettings.json`: define a new property in `appsettings.json` `properties`, then add a corresponding `handle_*()` reader in `framework_kiosk.js` (or its own file) and call it at the end of `framework_init()`.
