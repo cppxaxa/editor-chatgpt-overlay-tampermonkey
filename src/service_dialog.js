@@ -1,5 +1,7 @@
 // -----------------------------------------------------------------------------
-// component_dialog.js — modal result dialog (used by Code Check, etc.).
+// service_dialog.js — generic modal dialog service (showResultDialog).
+// Self-contained: no shared state, no external DOM deps. Reusable from any
+// component. Pass (title, body) strings.
 // -----------------------------------------------------------------------------
 
 function showResultDialog(title, body) {

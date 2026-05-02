@@ -290,7 +290,7 @@ src/
   component_actionbuttons.js  # (placeholder)
   component_undoredo.js       # custom undo/redo stack
   component_waitingui.js      # spinner + Cancel button
-  component_dialog.js         # modal result dialog
+  service_dialog.js           # generic modal dialog service (reusable)
   component_linecommand.js    # /p, /r commands + global hotkey dispatcher
   component_codecheck.js      # Alt+C review with ⭐ markers
   component_tab_ascii.js      # ASCII diagram tab

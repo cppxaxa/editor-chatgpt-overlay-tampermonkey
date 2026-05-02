@@ -56,16 +56,6 @@ function framework_init() {
     handle_kiosk();
 }
 
-// ===== src/component_actionbuttons.js =====
-// -----------------------------------------------------------------------------
-// component_actionbuttons.js — header action buttons.
-//
-// The actual buttons (↻ Regenerate, Command, Check, GitHub) are constructed
-// inside createEditor() in component_window.js because they live inside the
-// header DOM tree assembled there. This file is intentionally a placeholder
-// for future extraction of the button-row builder. No functions to declare yet.
-// -----------------------------------------------------------------------------
-
 // ===== src/component_codecheck.js =====
 // -----------------------------------------------------------------------------
 // component_codecheck.js — code review via ChatGPT with structured-JSON
@@ -366,100 +356,6 @@ function exitMaximizedColumnLayout() {
     textarea.style.display = "block";
 }
 
-// ===== src/component_dialog.js =====
-// -----------------------------------------------------------------------------
-// component_dialog.js — modal result dialog (used by Code Check, etc.).
-// -----------------------------------------------------------------------------
-
-function showResultDialog(title, body) {
-
-    const existing = document.getElementById("tm-result-dialog");
-    if (existing) existing.remove();
-
-    const overlay = document.createElement("div");
-    overlay.id = "tm-result-dialog";
-
-    Object.assign(overlay.style, {
-        position: "fixed",
-        inset: "0",
-        background: "rgba(0,0,0,.55)",
-        zIndex: "9999999",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center"
-    });
-
-    const dialog = document.createElement("div");
-
-    Object.assign(dialog.style, {
-        background: "#1e1e1e",
-        color: "#c9a36a",
-        border: "1px solid #444",
-        borderRadius: "10px",
-        padding: "20px 24px",
-        maxWidth: "520px",
-        width: "90%",
-        maxHeight: "70vh",
-        overflowY: "auto",
-        fontFamily: "monospace",
-        fontSize: "13px",
-        boxShadow: "0 12px 40px rgba(0,0,0,.6)"
-    });
-
-    const heading = document.createElement("div");
-
-    Object.assign(heading.style, {
-        fontSize: "15px",
-        fontWeight: "bold",
-        marginBottom: "14px",
-        color: "white"
-    });
-
-    heading.textContent = title;
-
-    const content = document.createElement("pre");
-
-    Object.assign(content.style, {
-        whiteSpace: "pre-wrap",
-        wordBreak: "break-word",
-        margin: "0",
-        lineHeight: "1.5"
-    });
-
-    content.textContent = body;
-
-    const closeBtn = document.createElement("button");
-    closeBtn.textContent = "Close";
-
-    Object.assign(closeBtn.style, {
-        marginTop: "16px",
-        background: "#444",
-        color: "white",
-        border: "none",
-        borderRadius: "6px",
-        padding: "6px 18px",
-        cursor: "pointer",
-        fontSize: "13px",
-        display: "block",
-        marginLeft: "auto"
-    });
-
-    closeBtn.onclick = () => overlay.remove();
-
-    dialog.appendChild(heading);
-    dialog.appendChild(content);
-    dialog.appendChild(closeBtn);
-    overlay.appendChild(dialog);
-
-    overlay.addEventListener("click", (e) => {
-        if (e.target === overlay) overlay.remove();
-    });
-
-    document.body.appendChild(overlay);
-
-    closeBtn.focus();
-}
-
 // ===== src/component_editor.js =====
 // -----------------------------------------------------------------------------
 // component_editor.js — shared editor textarea keydown handling
@@ -492,7 +388,7 @@ function attachEditorKeydown(ta) {
         if (isEditorTA && e.ctrlKey && !e.shiftKey && !e.altKey) {
             if (e.key.toLowerCase() === "z") {
                 e.preventDefault();
-                doUndo(textarea);
+                editorUndoRedoStack.doUndo(textarea);
                 if (windowMode === "maximized") {
                     const lines = textarea.value.split("\n");
                     const lpc = getLinesPerCol();
@@ -505,7 +401,7 @@ function attachEditorKeydown(ta) {
             }
             if (e.key.toLowerCase() === "y") {
                 e.preventDefault();
-                doRedo(textarea);
+                editorUndoRedoStack.doRedo(textarea);
                 if (windowMode === "maximized") {
                     const lines = textarea.value.split("\n");
                     const lpc = getLinesPerCol();
@@ -1323,61 +1219,6 @@ function switchTab(tabName) {
     }
 }
 
-// ===== src/component_undoredo.js =====
-// -----------------------------------------------------------------------------
-// component_undoredo.js — custom in-memory undo/redo stack for the Editor tab.
-// -----------------------------------------------------------------------------
-
-/* ---- Undo/redo-owned state ---- */
-
-const undoStack = [];
-const redoStack = [];
-const UNDO_MAX = 200;
-let undoTimer = null;
-let isUndoRedo = false;
-
-function pushUndo(value, cursorPos) {
-    if (isUndoRedo) return;
-    if (undoStack.length > 0 && undoStack[undoStack.length - 1].value === value) return;
-    undoStack.push({ value: value, cursor: cursorPos });
-    if (undoStack.length > UNDO_MAX) undoStack.shift();
-    redoStack.length = 0;
-}
-
-function pushUndoDebounced(ta) {
-    if (isUndoRedo) return;
-    clearTimeout(undoTimer);
-    undoTimer = setTimeout(() => {
-        pushUndo(ta.value, ta.selectionStart);
-    }, 300);
-}
-
-function doUndo(ta) {
-    if (undoStack.length === 0) return;
-
-    redoStack.push({ value: ta.value, cursor: ta.selectionStart });
-
-    const entry = undoStack.pop();
-    isUndoRedo = true;
-    ta.value = entry.value;
-    ta.selectionStart = ta.selectionEnd = entry.cursor;
-    localStorage.setItem("tm_editor_content", ta.value);
-    isUndoRedo = false;
-}
-
-function doRedo(ta) {
-    if (redoStack.length === 0) return;
-
-    undoStack.push({ value: ta.value, cursor: ta.selectionStart });
-
-    const entry = redoStack.pop();
-    isUndoRedo = true;
-    ta.value = entry.value;
-    ta.selectionStart = ta.selectionEnd = entry.cursor;
-    localStorage.setItem("tm_editor_content", ta.value);
-    isUndoRedo = false;
-}
-
 // ===== src/component_waitingui.js =====
 // -----------------------------------------------------------------------------
 // component_waitingui.js — spinner + Cancel button that replaces the
@@ -1709,10 +1550,10 @@ function createEditor() {
 
     textarea.addEventListener("input", () => {
         localStorage.setItem("tm_editor_content", textarea.value);
-        pushUndoDebounced(textarea);
+        editorUndoRedoStack.pushUndoDebounced(textarea);
     });
 
-    pushUndo(textarea.value, 0);
+    editorUndoRedoStack.pushUndo(textarea.value, 0);
 
     attachEditorKeydown(textarea);
 
@@ -1764,7 +1605,7 @@ function createEditor() {
             const merged = mergeColumnContent();
             textarea.value = merged;
             localStorage.setItem("tm_editor_content", merged);
-            pushUndoDebounced(textarea);
+            editorUndoRedoStack.pushUndoDebounced(textarea);
         });
     });
 
@@ -2214,6 +2055,102 @@ function framework_scrollbars_inject() {
     document.head.appendChild(style);
 }
 
+// ===== src/service_dialog.js =====
+// -----------------------------------------------------------------------------
+// service_dialog.js — generic modal dialog service (showResultDialog).
+// Self-contained: no shared state, no external DOM deps. Reusable from any
+// component. Pass (title, body) strings.
+// -----------------------------------------------------------------------------
+
+function showResultDialog(title, body) {
+
+    const existing = document.getElementById("tm-result-dialog");
+    if (existing) existing.remove();
+
+    const overlay = document.createElement("div");
+    overlay.id = "tm-result-dialog";
+
+    Object.assign(overlay.style, {
+        position: "fixed",
+        inset: "0",
+        background: "rgba(0,0,0,.55)",
+        zIndex: "9999999",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center"
+    });
+
+    const dialog = document.createElement("div");
+
+    Object.assign(dialog.style, {
+        background: "#1e1e1e",
+        color: "#c9a36a",
+        border: "1px solid #444",
+        borderRadius: "10px",
+        padding: "20px 24px",
+        maxWidth: "520px",
+        width: "90%",
+        maxHeight: "70vh",
+        overflowY: "auto",
+        fontFamily: "monospace",
+        fontSize: "13px",
+        boxShadow: "0 12px 40px rgba(0,0,0,.6)"
+    });
+
+    const heading = document.createElement("div");
+
+    Object.assign(heading.style, {
+        fontSize: "15px",
+        fontWeight: "bold",
+        marginBottom: "14px",
+        color: "white"
+    });
+
+    heading.textContent = title;
+
+    const content = document.createElement("pre");
+
+    Object.assign(content.style, {
+        whiteSpace: "pre-wrap",
+        wordBreak: "break-word",
+        margin: "0",
+        lineHeight: "1.5"
+    });
+
+    content.textContent = body;
+
+    const closeBtn = document.createElement("button");
+    closeBtn.textContent = "Close";
+
+    Object.assign(closeBtn.style, {
+        marginTop: "16px",
+        background: "#444",
+        color: "white",
+        border: "none",
+        borderRadius: "6px",
+        padding: "6px 18px",
+        cursor: "pointer",
+        fontSize: "13px",
+        display: "block",
+        marginLeft: "auto"
+    });
+
+    closeBtn.onclick = () => overlay.remove();
+
+    dialog.appendChild(heading);
+    dialog.appendChild(content);
+    dialog.appendChild(closeBtn);
+    overlay.appendChild(dialog);
+
+    overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) overlay.remove();
+    });
+
+    document.body.appendChild(overlay);
+
+    closeBtn.focus();
+}
+
 // ===== src/service_llm.js =====
 // -----------------------------------------------------------------------------
 // service_llm.js — small library for talking to the ChatGPT web UI.
@@ -2468,6 +2405,85 @@ async function sendMessage_chatgpt(prompt) {
 async function sendMessage(prompt) {
     return await sendMessage_chatgpt(prompt);
 }
+
+// ===== src/service_undoredo.js =====
+// -----------------------------------------------------------------------------
+// service_undoredo.js — reusable in-memory undo/redo stack class.
+//
+// Each instance owns its own undo/redo stacks, debounce timer, and re-entry
+// guard. Methods take the textarea as an argument (rather than the class
+// holding a reference) so the same instance survives DOM rebuilds and so the
+// textarea can be created lazily — the instance is constructed at module-eval
+// time, before createEditor() runs.
+//
+// One instance is created at the bottom of this file — `editorUndoRedoStack`
+// — and is the one wired up to the main Editor textarea. Additional
+// independent stacks (e.g. per column, per tab) can be instantiated by any
+// other component if/when needed.
+// -----------------------------------------------------------------------------
+
+class UndoRedoStack {
+    constructor({ max = 200, debounceMs = 300, storageKey = null } = {}) {
+        this.undoStack = [];
+        this.redoStack = [];
+        this.max = max;
+        this.debounceMs = debounceMs;
+        this.storageKey = storageKey; // optional — persisted on undo/redo
+        this.timer = null;
+        this.isUndoRedo = false;
+    }
+
+    pushUndo(value, cursorPos) {
+        if (this.isUndoRedo) return;
+        const top = this.undoStack[this.undoStack.length - 1];
+        if (top && top.value === value) return;
+        this.undoStack.push({ value: value, cursor: cursorPos });
+        if (this.undoStack.length > this.max) this.undoStack.shift();
+        this.redoStack.length = 0;
+    }
+
+    pushUndoDebounced(ta) {
+        if (this.isUndoRedo) return;
+        clearTimeout(this.timer);
+        this.timer = setTimeout(() => {
+            this.pushUndo(ta.value, ta.selectionStart);
+        }, this.debounceMs);
+    }
+
+    doUndo(ta) {
+        if (this.undoStack.length === 0) return;
+
+        this.redoStack.push({ value: ta.value, cursor: ta.selectionStart });
+
+        const entry = this.undoStack.pop();
+        this.isUndoRedo = true;
+        ta.value = entry.value;
+        ta.selectionStart = ta.selectionEnd = entry.cursor;
+        if (this.storageKey) localStorage.setItem(this.storageKey, ta.value);
+        this.isUndoRedo = false;
+    }
+
+    doRedo(ta) {
+        if (this.redoStack.length === 0) return;
+
+        this.undoStack.push({ value: ta.value, cursor: ta.selectionStart });
+
+        const entry = this.redoStack.pop();
+        this.isUndoRedo = true;
+        ta.value = entry.value;
+        ta.selectionStart = ta.selectionEnd = entry.cursor;
+        if (this.storageKey) localStorage.setItem(this.storageKey, ta.value);
+        this.isUndoRedo = false;
+    }
+}
+
+// The Editor tab's stack. Persisted-on-apply so undo/redo also rewrites
+// localStorage["tm_editor_content"] (matches the original behaviour).
+const editorUndoRedoStack = new UndoRedoStack({
+    max: 200,
+    debounceMs: 300,
+    storageKey: "tm_editor_content",
+});
 
 // ===== src/footer.js =====
 // -----------------------------------------------------------------------------

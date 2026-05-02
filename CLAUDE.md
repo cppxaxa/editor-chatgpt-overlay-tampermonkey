@@ -34,9 +34,10 @@ src/
   component_tabbar.js            # tab switching + simpleHash + getEditorContent +
                                  #   regenerateCurrentTab + per-tab cursor/scroll persistence
   component_actionbuttons.js     # placeholder (button row currently built inline in createEditor)
-  component_undoredo.js          # custom undo/redo stack (pushUndo, doUndo, doRedo)
+  service_undoredo.js            # UndoRedoStack class + editorUndoRedoStack singleton
+                                 #   (.pushUndo, .pushUndoDebounced, .doUndo, .doRedo)
   component_waitingui.js         # spinner + Cancel button (showWaitingUI / hideWaitingUI)
-  component_dialog.js            # modal result dialog (showResultDialog)
+  service_dialog.js              # generic modal dialog service (showResultDialog) — reusable
   component_linecommand.js       # /p and /r commands + global hotkey dispatcher
                                  #   (handleLineAction, registerLineReaderHotkey, applyIndent)
   component_codecheck.js         # Alt+C code review with ⭐ marker insertion

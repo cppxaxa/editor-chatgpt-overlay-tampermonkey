@@ -242,10 +242,10 @@ function createEditor() {
 
     textarea.addEventListener("input", () => {
         localStorage.setItem("tm_editor_content", textarea.value);
-        pushUndoDebounced(textarea);
+        editorUndoRedoStack.pushUndoDebounced(textarea);
     });
 
-    pushUndo(textarea.value, 0);
+    editorUndoRedoStack.pushUndo(textarea.value, 0);
 
     attachEditorKeydown(textarea);
 
@@ -297,7 +297,7 @@ function createEditor() {
             const merged = mergeColumnContent();
             textarea.value = merged;
             localStorage.setItem("tm_editor_content", merged);
-            pushUndoDebounced(textarea);
+            editorUndoRedoStack.pushUndoDebounced(textarea);
         });
     });
 

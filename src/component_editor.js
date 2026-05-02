@@ -29,7 +29,7 @@ function attachEditorKeydown(ta) {
         if (isEditorTA && e.ctrlKey && !e.shiftKey && !e.altKey) {
             if (e.key.toLowerCase() === "z") {
                 e.preventDefault();
-                doUndo(textarea);
+                editorUndoRedoStack.doUndo(textarea);
                 if (windowMode === "maximized") {
                     const lines = textarea.value.split("\n");
                     const lpc = getLinesPerCol();
@@ -42,7 +42,7 @@ function attachEditorKeydown(ta) {
             }
             if (e.key.toLowerCase() === "y") {
                 e.preventDefault();
-                doRedo(textarea);
+                editorUndoRedoStack.doRedo(textarea);
                 if (windowMode === "maximized") {
                     const lines = textarea.value.split("\n");
                     const lpc = getLinesPerCol();
