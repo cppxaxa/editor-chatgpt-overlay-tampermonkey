@@ -101,6 +101,8 @@ function framework_init() {
     tmStyle.textContent = `@keyframes tm-spin{to{transform:rotate(360deg)}}`;
     document.head.appendChild(tmStyle);
 
+    framework_scrollbars_inject();
+
     handle_kiosk();
 }
 
@@ -113,239 +115,6 @@ function framework_init() {
 // header DOM tree assembled there. This file is intentionally a placeholder
 // for future extraction of the button-row builder. No functions to declare yet.
 // -----------------------------------------------------------------------------
-
-// ===== src/component_chatgpt.js =====
-// -----------------------------------------------------------------------------
-// component_chatgpt.js — ChatGPT DOM automation. The bridge between the
-// scratchpad and ChatGPT's UI.
-// -----------------------------------------------------------------------------
-
-const STOP_BTN_SELECTOR = [
-    'button[data-testid="stop-button"]',
-    'button[aria-label="Stop streaming"]',
-    'button[aria-label="Stop generating"]',
-    'button[aria-label="Stop"]'
-].join(",");
-
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-function yieldFrame() { return new Promise(r => requestAnimationFrame(() => setTimeout(r, 0))); }
-
-async function insertTextIntoChatGPT(prompt) {
-
-    const input = document.querySelector("#prompt-textarea");
-
-    if (!input) {
-        alert("ChatGPT prompt box not found");
-        return false;
-    }
-
-    input.focus();
-    input.innerHTML = "";
-
-    document.execCommand("insertText", false, prompt);
-
-    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
-
-    return true;
-}
-
-async function waitForSendButton() {
-
-    for (let i = 0; i < 40; i++) {
-
-        const btn = document.querySelector(
-            'button[data-testid="send-button"]:not([disabled])'
-        );
-
-        if (btn) return btn;
-
-        await sleep(200);
-    }
-
-    return null;
-}
-
-async function sendPromptToChatGPT(prompt) {
-
-    const previousCount = document.querySelectorAll(
-        '[data-message-author-role="assistant"]'
-    ).length;
-
-    const ok = await insertTextIntoChatGPT(prompt);
-    if (!ok) return null;
-
-    const sendButton = await waitForSendButton();
-
-    if (!sendButton) {
-        alert("Send button not found");
-        return null;
-    }
-
-    sendButton.click();
-
-    return await waitForAssistantResponse(previousCount);
-}
-
-function extractCleanText(messageEl) {
-
-    const clone = messageEl.cloneNode(true);
-
-    /* Walk a subtree and concatenate text nodes, converting <br> to "\n".
-       Necessary because ChatGPT's rendered code blocks often use <br> as the
-       only line separator inside <pre><code><span>line</span><br>… and
-       textContent silently drops <br>, collapsing the block to one line. */
-    function extractTextWithBR(root) {
-        let out = "";
-        const walk = (node) => {
-            if (node.nodeType === 3) {           // TEXT_NODE
-                out += node.nodeValue;
-                return;
-            }
-            if (node.nodeType !== 1) return;     // anything else: skip
-            if (node.nodeName === "BR") {
-                out += "\n";
-                return;
-            }
-            node.childNodes.forEach(walk);
-        };
-        walk(root);
-        return out;
-    }
-
-    clone.querySelectorAll("pre div.sticky").forEach(el => el.remove());
-    clone.querySelectorAll('button[aria-label="Copy"]').forEach(el => el.remove());
-
-    clone.querySelectorAll("button").forEach(btn => {
-        const text = btn.textContent.trim().toLowerCase();
-        if (text === "copy code" || text === "copy" || text === "copied!") {
-            btn.remove();
-        }
-    });
-
-    /* Code blocks arrive in any of these shapes:
-
-         (a) <pre><code>…<br>…</code></pre>                    (markdown render)
-         (b) <div class="cm-content">…<br>…</div>              (CodeMirror, old)
-         (c) <div class="cm-content"><div class="cm-line">…    (CodeMirror, new)
-
-       The unifying primitive is extractTextWithBR — text nodes pass through,
-       <br> becomes "\n", everything else recurses. This handles all three
-       shapes uniformly and avoids relying on innerText/textContent quirks
-       (textContent drops <br>; innerText behaviour depends on CSS context
-       and is unreliable inside Tampermonkey's sandbox).
-
-       Process the most specific selectors first so a single block isn't
-       captured twice. */
-
-    const codePlaceholders = [];
-
-    function captureCode(el, text) {
-        const placeholder = "__CODE_BLOCK_" + codePlaceholders.length + "__";
-        codePlaceholders.push(text);
-        el.textContent = placeholder;
-    }
-
-    /* (b)/(c): CodeMirror containers. */
-    clone.querySelectorAll(".cm-content").forEach(cm => {
-
-        /* Newer CodeMirror layout: each line is a div.cm-line with no <br>
-           between lines. Join their textContent with "\n" explicitly. */
-        const cmLines = cm.querySelectorAll(".cm-line");
-        if (cmLines.length > 0) {
-            const lines = [];
-            cmLines.forEach(div => lines.push(div.textContent));
-            captureCode(cm, lines.join("\n"));
-            return;
-        }
-
-        /* Older CodeMirror layout (or any other shape) — let the BR walker
-           handle it. */
-        captureCode(cm, extractTextWithBR(cm));
-    });
-
-    /* (a): Markdown <pre><code>. */
-    clone.querySelectorAll("pre").forEach(pre => {
-
-        /* Skip <pre> already replaced via the .cm-content pass above. */
-        if (/__CODE_BLOCK_\d+__/.test(pre.textContent)) return;
-
-        const code = pre.querySelector("code") || pre;
-        const text = extractTextWithBR(code);
-        if (!text) return;
-
-        captureCode(pre, text);
-    });
-
-    let result = clone.innerText.trim();
-
-    codePlaceholders.forEach((code, i) => {
-        result = result.replace("__CODE_BLOCK_" + i + "__", code);
-    });
-
-    result = result.replace(/^```[\w]*\n?/gm, "").replace(/^```\s*$/gm, "");
-
-    return result.trim();
-}
-
-function waitForAssistantResponse(previousCount) {
-
-    const signal = waitAbortController ? waitAbortController.signal : null;
-
-    return new Promise(resolve => {
-
-        let phase = 1;
-
-        const interval = setInterval(() => {
-
-            if (signal && signal.aborted) {
-                clearInterval(interval);
-                resolve(null);
-                return;
-            }
-
-            const messages = document.querySelectorAll(
-                '[data-message-author-role="assistant"]'
-            );
-
-            if (phase === 1) {
-                if (messages.length > previousCount) phase = 2;
-                return;
-            }
-
-            if (phase === 2) {
-
-                const stopBtn = document.querySelector(STOP_BTN_SELECTOR);
-
-                if (!stopBtn) {
-                    phase = 3;
-
-                    setTimeout(() => {
-
-                        if (signal && signal.aborted) {
-                            clearInterval(interval);
-                            resolve(null);
-                            return;
-                        }
-
-                        clearInterval(interval);
-
-                        const finalMessages = document.querySelectorAll(
-                            '[data-message-author-role="assistant"]'
-                        );
-
-                        const last = finalMessages[finalMessages.length - 1];
-                        resolve(last ? extractCleanText(last) : "");
-
-                    }, 500);
-                }
-
-                return;
-            }
-
-        }, 500);
-    });
-}
 
 // ===== src/component_codecheck.js =====
 // -----------------------------------------------------------------------------
@@ -494,7 +263,7 @@ async function handleCodeCheck() {
 
     const numberedCode = code.split("\n").map((line, i) => (i + 1) + "> " + line).join("\n");
 
-    const response = await sendPromptToChatGPT(CODE_CHECK_PROMPT + numberedCode + "\n```");
+    const response = await sendMessage(CODE_CHECK_PROMPT + numberedCode + "\n```");
 
     hideWaitingUI();
     waitAbortController = null;
@@ -849,6 +618,56 @@ function attachEditorKeydown(ta) {
     });
 }
 
+// ===== src/component_kiosk.js =====
+// -----------------------------------------------------------------------------
+// component_kiosk.js — kiosk-mode UI behaviour. Invoked by handle_kiosk()
+// in framework_kiosk.js when localStorage["kiosk"] === "true". Opens the
+// floating editor and forces it into maximized mode so the app behaves
+// like a kiosk-style single-window experience.
+// -----------------------------------------------------------------------------
+
+function component_kiosk() {
+
+    /* 1. Open the editor dialog (lazy-create on first use, just like the
+          launcher button does). */
+    if (!container) createEditor();
+    container.style.display = "flex";
+
+    /* 2. Maximize it if it isn't already. The maximize button is not held
+          in a global ref, so locate it by text content within the header.
+          Falls back to inlining the same state transitions performed by
+          maxBtn.onclick in component_window.js if the button can't be
+          found (e.g. future markup changes). */
+    if (windowMode !== "maximized") {
+        const maxBtn = container.querySelector
+            ? Array.from(container.querySelectorAll("button"))
+                .find(b => b.textContent === "□")
+            : null;
+
+        if (maxBtn) {
+            maxBtn.click();
+        } else {
+            previousBounds = {
+                left: container.style.left,
+                top: container.style.top,
+                width: container.style.width,
+                height: container.style.height
+            };
+            container.style.left = "0";
+            container.style.top = "0";
+            container.style.width = "100vw";
+            container.style.height = "100vh";
+            if (resizeHandle) resizeHandle.style.display = "none";
+            windowMode = "maximized";
+            if (activeTab === "editor") enterMaximizedColumnLayout();
+        }
+    }
+
+    /* If we ended up maximized (just now or already), re-split the columns
+       since the launcher path does the same when restoring. */
+    if (windowMode === "maximized") redistributeColumns();
+}
+
 // ===== src/component_launcher.js =====
 // -----------------------------------------------------------------------------
 // component_launcher.js — the floating "E" button that opens the editor.
@@ -975,7 +794,7 @@ ${numberedContext}
 
         await yieldFrame();
 
-        const response = await sendPromptToChatGPT(contextualPrompt);
+        const response = await sendMessage(contextualPrompt);
 
         hideWaitingUI();
         waitAbortController = null;
@@ -1006,7 +825,7 @@ ${numberedContext}
 
         await yieldFrame();
 
-        const response = await sendPromptToChatGPT(prompt);
+        const response = await sendMessage(prompt);
 
         hideWaitingUI();
         waitAbortController = null;
@@ -1072,7 +891,7 @@ async function generateAsciiDiagram(code, hash) {
         "\n\nCode:\n" + code;
 
     try {
-        const response = await sendPromptToChatGPT(prompt);
+        const response = await sendMessage(prompt);
 
         if (waitAbortController && waitAbortController.signal.aborted) return;
 
@@ -1119,7 +938,7 @@ async function generateQuestion(code, hash) {
         "Code:\n" + code;
 
     try {
-        const response = await sendPromptToChatGPT(prompt);
+        const response = await sendMessage(prompt);
 
         if (waitAbortController && waitAbortController.signal.aborted) return;
 
@@ -1171,7 +990,7 @@ async function generateSnippets(code, hash) {
         "Code:\n" + code;
 
     try {
-        const response = await sendPromptToChatGPT(prompt);
+        const response = await sendMessage(prompt);
 
         if (waitAbortController && waitAbortController.signal.aborted) return;
 
@@ -1256,7 +1075,7 @@ async function generateSpreview(code, hash) {
         "Code:\n" + code;
 
     try {
-        const response = await sendPromptToChatGPT(prompt);
+        const response = await sendMessage(prompt);
 
         if (waitAbortController && waitAbortController.signal.aborted) return;
 
@@ -2272,12 +2091,28 @@ function restoreEditorState() {
     return true;
 }
 
+// ===== src/component_yieldframe.js =====
+// -----------------------------------------------------------------------------
+// component_yieldframe.js — tiny UI-paint helper.
+//
+// yieldFrame() awaits one requestAnimationFrame plus a setTimeout(0). Use it
+// after mutating the DOM (e.g. swapping the action-button row for a spinner
+// via showWaitingUI) and before kicking off a long synchronous-looking
+// async chain — it gives the browser a chance to paint the new state, so the
+// user actually sees the spinner before the next await blocks the event loop.
+//
+// Lives in its own file so any component can use it without pulling in the
+// rest of component_chatgpt.js.
+// -----------------------------------------------------------------------------
+
+function yieldFrame() { return new Promise(r => requestAnimationFrame(() => setTimeout(r, 0))); }
+
 // ===== src/framework_kiosk.js =====
 // -----------------------------------------------------------------------------
 // framework_kiosk.js — kiosk-mode bootstrap. Reads localStorage["kiosk"]
 // (populated by run_app.go from appsettings.json "properties") and, if set
-// to the string "true", auto-opens the floating editor in maximized mode so
-// the app behaves like a kiosk-style single-window experience.
+// to the string "true", delegates to component_kiosk() which lives in
+// component_kiosk.js.
 // -----------------------------------------------------------------------------
 
 function handle_kiosk() {
@@ -2290,46 +2125,316 @@ function handle_kiosk() {
     }
 }
 
-function component_kiosk() {
+// ===== src/framework_scrollbars.js =====
+// -----------------------------------------------------------------------------
+// framework_scrollbars.js — injects a minimalist black-theme scrollbar style
+// into the host page. Targets WebKit/Blink (Chrome) via `::-webkit-scrollbar`
+// pseudo-elements and also sets the standardised `scrollbar-color` /
+// `scrollbar-width` properties as a fallback.
+//
+// Called from framework_init() after the @keyframes style is injected.
+// -----------------------------------------------------------------------------
 
-    /* 1. Open the editor dialog (lazy-create on first use, just like the
-          launcher button does). */
-    if (!container) createEditor();
-    container.style.display = "flex";
+function framework_scrollbars_inject() {
+    // Avoid double-injection if framework_init() is somehow called twice.
+    if (document.getElementById("tm-scrollbar-style")) return;
 
-    /* 2. Maximize it if it isn't already. The maximize button is not held
-          in a global ref, so locate it by text content within the header.
-          Falls back to inlining the same state transitions performed by
-          maxBtn.onclick in component_window.js if the button can't be
-          found (e.g. future markup changes). */
-    if (windowMode !== "maximized") {
-        const maxBtn = container.querySelector
-            ? Array.from(container.querySelectorAll("button"))
-                .find(b => b.textContent === "□")
-            : null;
-
-        if (maxBtn) {
-            maxBtn.click();
-        } else {
-            previousBounds = {
-                left: container.style.left,
-                top: container.style.top,
-                width: container.style.width,
-                height: container.style.height
-            };
-            container.style.left = "0";
-            container.style.top = "0";
-            container.style.width = "100vw";
-            container.style.height = "100vh";
-            if (resizeHandle) resizeHandle.style.display = "none";
-            windowMode = "maximized";
-            if (activeTab === "editor") enterMaximizedColumnLayout();
+    const style = document.createElement("style");
+    style.id = "tm-scrollbar-style";
+    style.textContent = `
+        /* Standards-compliant (Firefox + modern Chromium) */
+        * {
+            scrollbar-width: thin;
+            scrollbar-color: #2a2a2a #000000;
         }
+
+        /* WebKit / Blink (Chrome, Edge, Opera) */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+            background: #000000;
+        }
+        ::-webkit-scrollbar-track {
+            background: #000000;
+            border: none;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #2a2a2a;
+            border-radius: 4px;
+            border: none;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #3d3d3d;
+        }
+        ::-webkit-scrollbar-thumb:active {
+            background: #4d4d4d;
+        }
+        ::-webkit-scrollbar-corner {
+            background: #000000;
+        }
+        /* Hide the up/down arrow buttons for a flat, minimalist look */
+        ::-webkit-scrollbar-button {
+            display: none;
+            width: 0;
+            height: 0;
+        }
+    `;
+    document.head.appendChild(style);
+}
+
+// ===== src/service_llm.js =====
+// -----------------------------------------------------------------------------
+// service_llm.js — small library for talking to the ChatGPT web UI.
+//
+// Public API:
+//
+//     const answer = await sendMessage("Your prompt here");
+//     // answer === string on success, null on failure / cancel.
+//
+// Internally this drives ChatGPT's prompt textarea, clicks send, watches the
+// DOM for a new assistant message, waits for streaming to finish, and returns
+// the cleaned text.
+//
+// Honours the global `waitAbortController` (declared in framework.js) so the
+// scratchpad's Cancel button can interrupt an in-flight wait.
+//
+// All helpers are named with a `_llm` suffix so they don't collide with the
+// equivalents in component_chatgpt.js when both files are concatenated into
+// the same IIFE. `sendMessage` is the only public symbol.
+// -----------------------------------------------------------------------------
+
+const STOP_BTN_SELECTOR_llm = [
+    'button[data-testid="stop-button"]',
+    'button[aria-label="Stop streaming"]',
+    'button[aria-label="Stop generating"]',
+    'button[aria-label="Stop"]'
+].join(",");
+
+function sleep_llm(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+async function insertTextIntoChatGPT_llm(prompt) {
+
+    const input = document.querySelector("#prompt-textarea");
+
+    if (!input) {
+        alert("ChatGPT prompt box not found");
+        return false;
     }
 
-    /* If we ended up maximized (just now or already), re-split the columns
-       since the launcher path does the same when restoring. */
-    if (windowMode === "maximized") redistributeColumns();
+    input.focus();
+    input.innerHTML = "";
+
+    document.execCommand("insertText", false, prompt);
+
+    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+
+    return true;
+}
+
+async function waitForSendButton_llm() {
+
+    for (let i = 0; i < 40; i++) {
+
+        const btn = document.querySelector(
+            'button[data-testid="send-button"]:not([disabled])'
+        );
+
+        if (btn) return btn;
+
+        await sleep_llm(200);
+    }
+
+    return null;
+}
+
+function extractCleanText_llm(messageEl) {
+
+    const clone = messageEl.cloneNode(true);
+
+    /* Walk a subtree and concatenate text nodes, converting <br> to "\n".
+       Necessary because ChatGPT's rendered code blocks often use <br> as the
+       only line separator inside <pre><code><span>line</span><br>… and
+       textContent silently drops <br>, collapsing the block to one line. */
+    function extractTextWithBR(root) {
+        let out = "";
+        const walk = (node) => {
+            if (node.nodeType === 3) {           // TEXT_NODE
+                out += node.nodeValue;
+                return;
+            }
+            if (node.nodeType !== 1) return;     // anything else: skip
+            if (node.nodeName === "BR") {
+                out += "\n";
+                return;
+            }
+            node.childNodes.forEach(walk);
+        };
+        walk(root);
+        return out;
+    }
+
+    clone.querySelectorAll("pre div.sticky").forEach(el => el.remove());
+    clone.querySelectorAll('button[aria-label="Copy"]').forEach(el => el.remove());
+
+    clone.querySelectorAll("button").forEach(btn => {
+        const text = btn.textContent.trim().toLowerCase();
+        if (text === "copy code" || text === "copy" || text === "copied!") {
+            btn.remove();
+        }
+    });
+
+    /* Code blocks arrive in any of these shapes:
+
+         (a) <pre><code>…<br>…</code></pre>                    (markdown render)
+         (b) <div class="cm-content">…<br>…</div>              (CodeMirror, old)
+         (c) <div class="cm-content"><div class="cm-line">…    (CodeMirror, new)
+
+       The unifying primitive is extractTextWithBR — text nodes pass through,
+       <br> becomes "\n", everything else recurses. This handles all three
+       shapes uniformly and avoids relying on innerText/textContent quirks
+       (textContent drops <br>; innerText behaviour depends on CSS context
+       and is unreliable inside Tampermonkey's sandbox).
+
+       Process the most specific selectors first so a single block isn't
+       captured twice. */
+
+    const codePlaceholders = [];
+
+    function captureCode(el, text) {
+        const placeholder = "__CODE_BLOCK_" + codePlaceholders.length + "__";
+        codePlaceholders.push(text);
+        el.textContent = placeholder;
+    }
+
+    /* (b)/(c): CodeMirror containers. */
+    clone.querySelectorAll(".cm-content").forEach(cm => {
+
+        /* Newer CodeMirror layout: each line is a div.cm-line with no <br>
+           between lines. Join their textContent with "\n" explicitly. */
+        const cmLines = cm.querySelectorAll(".cm-line");
+        if (cmLines.length > 0) {
+            const lines = [];
+            cmLines.forEach(div => lines.push(div.textContent));
+            captureCode(cm, lines.join("\n"));
+            return;
+        }
+
+        /* Older CodeMirror layout (or any other shape) — let the BR walker
+           handle it. */
+        captureCode(cm, extractTextWithBR(cm));
+    });
+
+    /* (a): Markdown <pre><code>. */
+    clone.querySelectorAll("pre").forEach(pre => {
+
+        /* Skip <pre> already replaced via the .cm-content pass above. */
+        if (/__CODE_BLOCK_\d+__/.test(pre.textContent)) return;
+
+        const code = pre.querySelector("code") || pre;
+        const text = extractTextWithBR(code);
+        if (!text) return;
+
+        captureCode(pre, text);
+    });
+
+    let result = clone.innerText.trim();
+
+    codePlaceholders.forEach((code, i) => {
+        result = result.replace("__CODE_BLOCK_" + i + "__", code);
+    });
+
+    result = result.replace(/^```[\w]*\n?/gm, "").replace(/^```\s*$/gm, "");
+
+    return result.trim();
+}
+
+function waitForAssistantResponse_llm(previousCount) {
+
+    const signal = (typeof waitAbortController !== "undefined" && waitAbortController)
+        ? waitAbortController.signal
+        : null;
+
+    return new Promise(resolve => {
+
+        let phase = 1;
+
+        const interval = setInterval(() => {
+
+            if (signal && signal.aborted) {
+                clearInterval(interval);
+                resolve(null);
+                return;
+            }
+
+            const messages = document.querySelectorAll(
+                '[data-message-author-role="assistant"]'
+            );
+
+            if (phase === 1) {
+                if (messages.length > previousCount) phase = 2;
+                return;
+            }
+
+            if (phase === 2) {
+
+                const stopBtn = document.querySelector(STOP_BTN_SELECTOR_llm);
+
+                if (!stopBtn) {
+                    phase = 3;
+
+                    setTimeout(() => {
+
+                        if (signal && signal.aborted) {
+                            clearInterval(interval);
+                            resolve(null);
+                            return;
+                        }
+
+                        clearInterval(interval);
+
+                        const finalMessages = document.querySelectorAll(
+                            '[data-message-author-role="assistant"]'
+                        );
+
+                        const last = finalMessages[finalMessages.length - 1];
+                        resolve(last ? extractCleanText_llm(last) : "");
+
+                    }, 500);
+                }
+
+                return;
+            }
+
+        }, 500);
+    });
+}
+
+async function sendMessage_chatgpt(prompt) {
+
+    const previousCount = document.querySelectorAll(
+        '[data-message-author-role="assistant"]'
+    ).length;
+
+    const ok = await insertTextIntoChatGPT_llm(prompt);
+    if (!ok) return null;
+
+    const sendButton = await waitForSendButton_llm();
+
+    if (!sendButton) {
+        alert("Send button not found");
+        return null;
+    }
+
+    sendButton.click();
+
+    return await waitForAssistantResponse_llm(previousCount);
+}
+
+// -----------------------------------------------------------------------------
+// Public entry point.
+// -----------------------------------------------------------------------------
+async function sendMessage(prompt) {
+    return await sendMessage_chatgpt(prompt);
 }
 
 // ===== src/footer.js =====

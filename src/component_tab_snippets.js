@@ -30,7 +30,7 @@ async function generateSnippets(code, hash) {
         "Code:\n" + code;
 
     try {
-        const response = await sendPromptToChatGPT(prompt);
+        const response = await sendMessage(prompt);
 
         if (waitAbortController && waitAbortController.signal.aborted) return;
 

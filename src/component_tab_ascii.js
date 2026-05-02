@@ -14,7 +14,7 @@ async function generateAsciiDiagram(code, hash) {
         "\n\nCode:\n" + code;
 
     try {
-        const response = await sendPromptToChatGPT(prompt);
+        const response = await sendMessage(prompt);
 
         if (waitAbortController && waitAbortController.signal.aborted) return;
 

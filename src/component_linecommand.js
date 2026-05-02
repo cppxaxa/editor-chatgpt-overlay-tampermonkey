@@ -83,7 +83,7 @@ ${numberedContext}
 
         await yieldFrame();
 
-        const response = await sendPromptToChatGPT(contextualPrompt);
+        const response = await sendMessage(contextualPrompt);
 
         hideWaitingUI();
         waitAbortController = null;
@@ -114,7 +114,7 @@ ${numberedContext}
 
         await yieldFrame();
 
-        const response = await sendPromptToChatGPT(prompt);
+        const response = await sendMessage(prompt);
 
         hideWaitingUI();
         waitAbortController = null;

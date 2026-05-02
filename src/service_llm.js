@@ -1,20 +1,33 @@
 // -----------------------------------------------------------------------------
-// component_chatgpt.js — ChatGPT DOM automation. The bridge between the
-// scratchpad and ChatGPT's UI.
+// service_llm.js — small library for talking to the ChatGPT web UI.
+//
+// Public API:
+//
+//     const answer = await sendMessage("Your prompt here");
+//     // answer === string on success, null on failure / cancel.
+//
+// Internally this drives ChatGPT's prompt textarea, clicks send, watches the
+// DOM for a new assistant message, waits for streaming to finish, and returns
+// the cleaned text.
+//
+// Honours the global `waitAbortController` (declared in framework.js) so the
+// scratchpad's Cancel button can interrupt an in-flight wait.
+//
+// All helpers are named with a `_llm` suffix so they don't collide with the
+// equivalents in component_chatgpt.js when both files are concatenated into
+// the same IIFE. `sendMessage` is the only public symbol.
 // -----------------------------------------------------------------------------
 
-const STOP_BTN_SELECTOR = [
+const STOP_BTN_SELECTOR_llm = [
     'button[data-testid="stop-button"]',
     'button[aria-label="Stop streaming"]',
     'button[aria-label="Stop generating"]',
     'button[aria-label="Stop"]'
 ].join(",");
 
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function sleep_llm(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-function yieldFrame() { return new Promise(r => requestAnimationFrame(() => setTimeout(r, 0))); }
-
-async function insertTextIntoChatGPT(prompt) {
+async function insertTextIntoChatGPT_llm(prompt) {
 
     const input = document.querySelector("#prompt-textarea");
 
@@ -33,7 +46,7 @@ async function insertTextIntoChatGPT(prompt) {
     return true;
 }
 
-async function waitForSendButton() {
+async function waitForSendButton_llm() {
 
     for (let i = 0; i < 40; i++) {
 
@@ -43,34 +56,13 @@ async function waitForSendButton() {
 
         if (btn) return btn;
 
-        await sleep(200);
+        await sleep_llm(200);
     }
 
     return null;
 }
 
-async function sendPromptToChatGPT(prompt) {
-
-    const previousCount = document.querySelectorAll(
-        '[data-message-author-role="assistant"]'
-    ).length;
-
-    const ok = await insertTextIntoChatGPT(prompt);
-    if (!ok) return null;
-
-    const sendButton = await waitForSendButton();
-
-    if (!sendButton) {
-        alert("Send button not found");
-        return null;
-    }
-
-    sendButton.click();
-
-    return await waitForAssistantResponse(previousCount);
-}
-
-function extractCleanText(messageEl) {
+function extractCleanText_llm(messageEl) {
 
     const clone = messageEl.cloneNode(true);
 
@@ -171,9 +163,11 @@ function extractCleanText(messageEl) {
     return result.trim();
 }
 
-function waitForAssistantResponse(previousCount) {
+function waitForAssistantResponse_llm(previousCount) {
 
-    const signal = waitAbortController ? waitAbortController.signal : null;
+    const signal = (typeof waitAbortController !== "undefined" && waitAbortController)
+        ? waitAbortController.signal
+        : null;
 
     return new Promise(resolve => {
 
@@ -198,7 +192,7 @@ function waitForAssistantResponse(previousCount) {
 
             if (phase === 2) {
 
-                const stopBtn = document.querySelector(STOP_BTN_SELECTOR);
+                const stopBtn = document.querySelector(STOP_BTN_SELECTOR_llm);
 
                 if (!stopBtn) {
                     phase = 3;
@@ -218,7 +212,7 @@ function waitForAssistantResponse(previousCount) {
                         );
 
                         const last = finalMessages[finalMessages.length - 1];
-                        resolve(last ? extractCleanText(last) : "");
+                        resolve(last ? extractCleanText_llm(last) : "");
 
                     }, 500);
                 }
@@ -228,4 +222,32 @@ function waitForAssistantResponse(previousCount) {
 
         }, 500);
     });
+}
+
+async function sendMessage_chatgpt(prompt) {
+
+    const previousCount = document.querySelectorAll(
+        '[data-message-author-role="assistant"]'
+    ).length;
+
+    const ok = await insertTextIntoChatGPT_llm(prompt);
+    if (!ok) return null;
+
+    const sendButton = await waitForSendButton_llm();
+
+    if (!sendButton) {
+        alert("Send button not found");
+        return null;
+    }
+
+    sendButton.click();
+
+    return await waitForAssistantResponse_llm(previousCount);
+}
+
+// -----------------------------------------------------------------------------
+// Public entry point.
+// -----------------------------------------------------------------------------
+async function sendMessage(prompt) {
+    return await sendMessage_chatgpt(prompt);
 }

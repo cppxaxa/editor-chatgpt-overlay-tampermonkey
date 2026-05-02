@@ -76,5 +76,7 @@ function framework_init() {
     tmStyle.textContent = `@keyframes tm-spin{to{transform:rotate(360deg)}}`;
     document.head.appendChild(tmStyle);
 
+    framework_scrollbars_inject();
+
     handle_kiosk();
 }

@@ -144,7 +144,7 @@ async function handleCodeCheck() {
 
     const numberedCode = code.split("\n").map((line, i) => (i + 1) + "> " + line).join("\n");
 
-    const response = await sendPromptToChatGPT(CODE_CHECK_PROMPT + numberedCode + "\n```");
+    const response = await sendMessage(CODE_CHECK_PROMPT + numberedCode + "\n```");
 
     hideWaitingUI();
     waitAbortController = null;
