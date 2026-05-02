@@ -3,6 +3,11 @@
 // response parsing and ⭐ marker insertion.
 // -----------------------------------------------------------------------------
 
+/* ---- Codecheck-owned state ---- */
+
+const MARKER_CHAR = "⭐";
+let checkCache = { hash: null, parsed: null, body: "" };
+
 const CODE_CHECK_PROMPT = `Review the following code. Respond ONLY with a JSON object (no markdown, no fences, no extra text) in this exact format:
 
 {

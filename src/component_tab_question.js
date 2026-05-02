@@ -2,6 +2,12 @@
 // component_tab_question.js — Question tab generator.
 // -----------------------------------------------------------------------------
 
+/* ---- Question-tab-owned state ---- */
+
+let questionTA;
+let questionCache = { hash: null, content: "" };
+const QUESTION_CACHE_KEY = "tm_question_cache";
+
 async function generateQuestion(code, hash) {
 
     waitAbortController = new AbortController();

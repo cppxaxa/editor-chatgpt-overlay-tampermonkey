@@ -3,6 +3,12 @@
 // HTML rendered in a sandboxed iframe).
 // -----------------------------------------------------------------------------
 
+/* ---- S-Preview-tab-owned state ---- */
+
+let spreviewFrame;
+let spreviewCache = { hash: null, content: "" };
+const SPREVIEW_CACHE_KEY = "tm_spreview_cache";
+
 function setSpreviewContent(html) {
     const cssReset = '<style>pre,code{white-space:pre!important;tab-size:4!important}td pre{margin:0!important}</style>';
     if (html.indexOf('<head') !== -1) {

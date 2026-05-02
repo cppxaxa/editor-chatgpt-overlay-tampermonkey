@@ -4,6 +4,19 @@
 // whole UI together.
 // -----------------------------------------------------------------------------
 
+/* ---- Window-owned state ----
+   These are populated by createEditor() and read by other components. The
+   window component is the sole writer; everyone else is a reader. */
+
+const EDITOR_STATE_KEY = "tm_editor_window_state";
+
+let container;
+let textarea;
+let resizeHandle;
+let headerEl;
+let windowMode = "normal";
+let previousBounds = null;
+
 function createEditor() {
 
     container = document.createElement("div");

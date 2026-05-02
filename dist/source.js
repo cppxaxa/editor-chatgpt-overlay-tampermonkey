@@ -24,68 +24,18 @@
 
 // ===== src/framework.js =====
 // -----------------------------------------------------------------------------
-// framework.js — global state, lifecycle bootstrap, and the @keyframes style.
+// framework.js — framework-level shared state and lifecycle bootstrap.
 //
-// NOTE: We are intentionally porting the original monolith function/variable
-// names verbatim into per-component files first. The rename to the
-// framework_*/component_* naming scheme described in PROPOSAL.md will be a
-// follow-up pass once the split is verified to behave identically.
+// Component-owned state has been moved into the owning component_*.js files.
+// What lives here is genuinely cross-component:
+//   - waitAbortController: the single in-flight cancellable LLM request,
+//     shared by every tab generator, line commands, codecheck, waitingui,
+//     and service_llm.
 // -----------------------------------------------------------------------------
 
-/* ---- Global state (was top-of-file in the monolith) ---- */
+/* ---- Framework-level shared state ---- */
 
-const EDITOR_STATE_KEY = "tm_editor_window_state";
-
-let container;
-let textarea;
-let resizeHandle;
-
-let headerEl;
-let windowMode = "normal";
-let previousBounds = null;
 let waitAbortController = null;
-
-let columnContainer;  // flex wrapper for the two column textareas
-let leftTA;           // left textarea
-let rightTA;          // right textarea
-let syncing = false;  // guard against recursive input during redistribution
-let lastFocusedTA = null; // track last focused textarea for button clicks
-
-const MARKER_CHAR = "⭐"; // ⭐
-
-let activeTab = "editor";
-let asciiTA;
-let asciiCache = { hash: null, content: "" };
-const ASCII_CACHE_KEY = "tm_ascii_cache";
-let checkCache = { hash: null, parsed: null, body: "" };
-let editorTabBtn;
-let asciiTabBtn;
-let questionTabBtn;
-let snippetsTabBtn;
-let spreviewTabBtn;
-let questionTA;
-let questionCache = { hash: null, content: "" };
-const QUESTION_CACHE_KEY = "tm_question_cache";
-let snippetsTA;
-let snippetsCache = { hash: null, content: "" };
-const SNIPPETS_CACHE_KEY = "tm_snippets_cache";
-let spreviewFrame;
-let spreviewCache = { hash: null, content: "" };
-const SPREVIEW_CACHE_KEY = "tm_spreview_cache";
-
-const tabState = {
-    editor:   { scrollTop: 0, selStart: 0, selEnd: 0 },
-    ascii:    { scrollTop: 0, selStart: 0, selEnd: 0 },
-    question: { scrollTop: 0, selStart: 0, selEnd: 0 },
-    snippets: { scrollTop: 0, selStart: 0, selEnd: 0 },
-    spreview: { scrollTop: 0, selStart: 0, selEnd: 0 }
-};
-
-const undoStack = [];
-const redoStack = [];
-const UNDO_MAX = 200;
-let undoTimer = null;
-let isUndoRedo = false;
 
 /* ---- Bootstrap ---- */
 
@@ -121,6 +71,11 @@ function framework_init() {
 // component_codecheck.js — code review via ChatGPT with structured-JSON
 // response parsing and ⭐ marker insertion.
 // -----------------------------------------------------------------------------
+
+/* ---- Codecheck-owned state ---- */
+
+const MARKER_CHAR = "⭐";
+let checkCache = { hash: null, parsed: null, body: "" };
 
 const CODE_CHECK_PROMPT = `Review the following code. Respond ONLY with a JSON object (no markdown, no fences, no extra text) in this exact format:
 
@@ -330,6 +285,15 @@ async function handleCodeCheck() {
 // component_columns.js — two-column layout (maximized mode).
 // -----------------------------------------------------------------------------
 
+/* ---- Column-owned state ----
+   Constructed by createEditor() in component_window.js, but the redistribute /
+   merge / sync logic lives here, so the declarations belong here. */
+
+let columnContainer;  // flex wrapper for the two column textareas
+let leftTA;           // left textarea
+let rightTA;          // right textarea
+let syncing = false;  // guard against recursive input during redistribution
+
 function getLinesPerCol() {
     const containerH = container.offsetHeight - headerEl.offsetHeight;
     return Math.max(1, Math.floor((containerH - 20) / 18));
@@ -503,6 +467,10 @@ function showResultDialog(title, body) {
 // marker cleanup on cursor movement). Used for the main textarea AND for
 // both column textareas.
 // -----------------------------------------------------------------------------
+
+/* ---- Editor-owned state ---- */
+
+let lastFocusedTA = null; // track last focused textarea for button clicks
 
 function attachEditorKeydown(ta) {
 
@@ -879,6 +847,12 @@ function registerLineReaderHotkey() {
 // component_tab_ascii.js — Ascii design tab generator.
 // -----------------------------------------------------------------------------
 
+/* ---- Ascii-tab-owned state ---- */
+
+let asciiTA;
+let asciiCache = { hash: null, content: "" };
+const ASCII_CACHE_KEY = "tm_ascii_cache";
+
 async function generateAsciiDiagram(code, hash) {
 
     waitAbortController = new AbortController();
@@ -914,6 +888,12 @@ async function generateAsciiDiagram(code, hash) {
 // -----------------------------------------------------------------------------
 // component_tab_question.js — Question tab generator.
 // -----------------------------------------------------------------------------
+
+/* ---- Question-tab-owned state ---- */
+
+let questionTA;
+let questionCache = { hash: null, content: "" };
+const QUESTION_CACHE_KEY = "tm_question_cache";
 
 async function generateQuestion(code, hash) {
 
@@ -961,6 +941,12 @@ async function generateQuestion(code, hash) {
 // -----------------------------------------------------------------------------
 // component_tab_snippets.js — Snippets tab generator.
 // -----------------------------------------------------------------------------
+
+/* ---- Snippets-tab-owned state ---- */
+
+let snippetsTA;
+let snippetsCache = { hash: null, content: "" };
+const SNIPPETS_CACHE_KEY = "tm_snippets_cache";
 
 async function generateSnippets(code, hash) {
 
@@ -1014,6 +1000,12 @@ async function generateSnippets(code, hash) {
 // component_tab_spreview.js — S-Preview tab generator (syntax-highlighted
 // HTML rendered in a sandboxed iframe).
 // -----------------------------------------------------------------------------
+
+/* ---- S-Preview-tab-owned state ---- */
+
+let spreviewFrame;
+let spreviewCache = { hash: null, content: "" };
+const SPREVIEW_CACHE_KEY = "tm_spreview_cache";
 
 function setSpreviewContent(html) {
     const cssReset = '<style>pre,code{white-space:pre!important;tab-size:4!important}td pre{margin:0!important}</style>';
@@ -1106,6 +1098,25 @@ async function generateSpreview(code, hash) {
 // component_tabbar.js — tab switching, per-tab cursor/scroll persistence,
 // regenerate-current dispatch, and shared helpers (simpleHash, getEditorContent).
 // -----------------------------------------------------------------------------
+
+/* ---- Tabbar-owned state ----
+   Tab buttons are constructed in createEditor() (component_window.js) but the
+   active-tab selection and per-tab cursor/scroll state live here. */
+
+let activeTab = "editor";
+let editorTabBtn;
+let asciiTabBtn;
+let questionTabBtn;
+let snippetsTabBtn;
+let spreviewTabBtn;
+
+const tabState = {
+    editor:   { scrollTop: 0, selStart: 0, selEnd: 0 },
+    ascii:    { scrollTop: 0, selStart: 0, selEnd: 0 },
+    question: { scrollTop: 0, selStart: 0, selEnd: 0 },
+    snippets: { scrollTop: 0, selStart: 0, selEnd: 0 },
+    spreview: { scrollTop: 0, selStart: 0, selEnd: 0 }
+};
 
 function simpleHash(str) {
     let hash = 5381;
@@ -1317,6 +1328,14 @@ function switchTab(tabName) {
 // component_undoredo.js — custom in-memory undo/redo stack for the Editor tab.
 // -----------------------------------------------------------------------------
 
+/* ---- Undo/redo-owned state ---- */
+
+const undoStack = [];
+const redoStack = [];
+const UNDO_MAX = 200;
+let undoTimer = null;
+let isUndoRedo = false;
+
 function pushUndo(value, cursorPos) {
     if (isUndoRedo) return;
     if (undoStack.length > 0 && undoStack[undoStack.length - 1].value === value) return;
@@ -1451,6 +1470,19 @@ function hideWaitingUI() {
 // resize, persisted geometry, and the master createEditor() that wires the
 // whole UI together.
 // -----------------------------------------------------------------------------
+
+/* ---- Window-owned state ----
+   These are populated by createEditor() and read by other components. The
+   window component is the sole writer; everyone else is a reader. */
+
+const EDITOR_STATE_KEY = "tm_editor_window_state";
+
+let container;
+let textarea;
+let resizeHandle;
+let headerEl;
+let windowMode = "normal";
+let previousBounds = null;
 
 function createEditor() {
 

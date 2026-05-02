@@ -2,6 +2,12 @@
 // component_tab_snippets.js — Snippets tab generator.
 // -----------------------------------------------------------------------------
 
+/* ---- Snippets-tab-owned state ---- */
+
+let snippetsTA;
+let snippetsCache = { hash: null, content: "" };
+const SNIPPETS_CACHE_KEY = "tm_snippets_cache";
+
 async function generateSnippets(code, hash) {
 
     waitAbortController = new AbortController();

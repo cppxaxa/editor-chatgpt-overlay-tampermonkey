@@ -2,6 +2,14 @@
 // component_undoredo.js — custom in-memory undo/redo stack for the Editor tab.
 // -----------------------------------------------------------------------------
 
+/* ---- Undo/redo-owned state ---- */
+
+const undoStack = [];
+const redoStack = [];
+const UNDO_MAX = 200;
+let undoTimer = null;
+let isUndoRedo = false;
+
 function pushUndo(value, cursorPos) {
     if (isUndoRedo) return;
     if (undoStack.length > 0 && undoStack[undoStack.length - 1].value === value) return;

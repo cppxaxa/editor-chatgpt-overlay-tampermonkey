@@ -3,6 +3,25 @@
 // regenerate-current dispatch, and shared helpers (simpleHash, getEditorContent).
 // -----------------------------------------------------------------------------
 
+/* ---- Tabbar-owned state ----
+   Tab buttons are constructed in createEditor() (component_window.js) but the
+   active-tab selection and per-tab cursor/scroll state live here. */
+
+let activeTab = "editor";
+let editorTabBtn;
+let asciiTabBtn;
+let questionTabBtn;
+let snippetsTabBtn;
+let spreviewTabBtn;
+
+const tabState = {
+    editor:   { scrollTop: 0, selStart: 0, selEnd: 0 },
+    ascii:    { scrollTop: 0, selStart: 0, selEnd: 0 },
+    question: { scrollTop: 0, selStart: 0, selEnd: 0 },
+    snippets: { scrollTop: 0, selStart: 0, selEnd: 0 },
+    spreview: { scrollTop: 0, selStart: 0, selEnd: 0 }
+};
+
 function simpleHash(str) {
     let hash = 5381;
     for (let i = 0; i < str.length; i++) {

@@ -2,6 +2,12 @@
 // component_tab_ascii.js — Ascii design tab generator.
 // -----------------------------------------------------------------------------
 
+/* ---- Ascii-tab-owned state ---- */
+
+let asciiTA;
+let asciiCache = { hash: null, content: "" };
+const ASCII_CACHE_KEY = "tm_ascii_cache";
+
 async function generateAsciiDiagram(code, hash) {
 
     waitAbortController = new AbortController();

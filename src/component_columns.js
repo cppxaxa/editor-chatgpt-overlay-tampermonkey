@@ -2,6 +2,15 @@
 // component_columns.js — two-column layout (maximized mode).
 // -----------------------------------------------------------------------------
 
+/* ---- Column-owned state ----
+   Constructed by createEditor() in component_window.js, but the redistribute /
+   merge / sync logic lives here, so the declarations belong here. */
+
+let columnContainer;  // flex wrapper for the two column textareas
+let leftTA;           // left textarea
+let rightTA;          // right textarea
+let syncing = false;  // guard against recursive input during redistribution
+
 function getLinesPerCol() {
     const containerH = container.offsetHeight - headerEl.offsetHeight;
     return Math.max(1, Math.floor((containerH - 20) / 18));

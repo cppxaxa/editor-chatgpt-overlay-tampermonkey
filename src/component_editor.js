@@ -5,6 +5,10 @@
 // both column textareas.
 // -----------------------------------------------------------------------------
 
+/* ---- Editor-owned state ---- */
+
+let lastFocusedTA = null; // track last focused textarea for button clicks
+
 function attachEditorKeydown(ta) {
 
     ta.addEventListener("focus", () => { lastFocusedTA = ta; });
