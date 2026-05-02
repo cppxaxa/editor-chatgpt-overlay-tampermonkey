@@ -30,10 +30,11 @@ import (
 )
 
 type appSettings struct {
-	ChromePath []string       `json:"chromepath"`
-	ChromePort int            `json:"chromeport"`
-	App        string         `json:"app"`
-	Properties map[string]any `json:"properties"`
+	ChromePath    []string       `json:"chromepath"`
+	ChromeProfile []string       `json:"chromeprofile"`
+	ChromePort    []int          `json:"chromeport"`
+	App           string         `json:"app"`
+	Properties    map[string]any `json:"properties"`
 }
 
 type debugTarget struct {
@@ -78,30 +79,74 @@ func run() error {
 		return fmt.Errorf("read %s: %w (run build first)", scriptPath, err)
 	}
 
-	port := cfg.ChromePort
-	if port == 0 {
-		port = 9222
+	// Resolve a (profile, port) slot. The two arrays are paired by index, so
+	// slot i means "use chromeprofile[i] with chromeport[i]". For each slot
+	// we check whether it's free — i.e. its profile dir is not locked by a
+	// running chrome AND its port is bindable. The first free slot wins.
+	//
+	// Why both checks? Chrome's profile lock tells us whether *another chrome*
+	// already owns that profile (running 2nd instance against the same profile
+	// is a no-op + hang). The port bindability check tells us whether the
+	// remote-debugging port we'd hand chrome is actually free. Either failure
+	// means this slot is already taken by a previous run_app invocation.
+	profiles := cfg.ChromeProfile
+	ports := cfg.ChromePort
+	if len(profiles) == 0 {
+		profiles = []string{"chrome-profile"}
+	}
+	if len(ports) == 0 {
+		ports = []int{9222}
+	}
+	if len(profiles) != len(ports) {
+		return fmt.Errorf(
+			"appsettings.json: chromeprofile (%d entries) and chromeport (%d entries) must have the same length",
+			len(profiles), len(ports))
 	}
 
-	// If the configured port is already in use (or otherwise unbindable),
-	// fall back to an OS-assigned free port. We do a quick bind-test on the
-	// loopback interface — if it succeeds we release it immediately and let
-	// chrome bind it. If it fails we ask the kernel for any free port.
-	if !isPortBindable(port) {
-		freePort, err := findFreePort()
-		if err != nil {
-			return fmt.Errorf("port %d unavailable and could not pick a fallback: %w", port, err)
+	var profileDir string
+	var port int
+	chosen := -1
+	var skipReasons []string
+	for i := range profiles {
+		candidateDir := profiles[i]
+		if !filepath.IsAbs(candidateDir) {
+			candidateDir = filepath.Join(cwd, candidateDir)
 		}
-		fmt.Printf("Port %d is not bindable; falling back to port %d.\n", port, freePort)
-		port = freePort
+		candidatePort := ports[i]
+
+		if locked, holder := isProfileLocked(candidateDir); locked {
+			skipReasons = append(skipReasons,
+				fmt.Sprintf("  slot %d: profile %q locked (%s)", i, candidateDir, holder))
+			continue
+		}
+		if !isPortBindable(candidatePort) {
+			skipReasons = append(skipReasons,
+				fmt.Sprintf("  slot %d: port %d not bindable", i, candidatePort))
+			continue
+		}
+
+		profileDir = candidateDir
+		port = candidatePort
+		chosen = i
+		break
 	}
+	if chosen < 0 {
+		return fmt.Errorf(
+			"all %d configured (profile, port) slots are in use:\n%s\n"+
+				"Add another entry to chromeprofile and chromeport in appsettings.json, or close an existing instance.",
+			len(profiles), strings.Join(skipReasons, "\n"))
+	}
+	if len(skipReasons) > 0 {
+		fmt.Printf("Skipped slots:\n%s\n", strings.Join(skipReasons, "\n"))
+	}
+	fmt.Printf("Using slot %d: profile=%q port=%d\n", chosen, profileDir, port)
 
 	args := []string{
 		"--app=https://chatgpt.com",
 		"--start-maximized",
 		fmt.Sprintf("--remote-debugging-port=%d", port),
 		"--remote-allow-origins=*",
-		fmt.Sprintf("--user-data-dir=%s", filepath.Join(cwd, "chrome-profile")),
+		fmt.Sprintf("--user-data-dir=%s", profileDir),
 	}
 
 	fmt.Printf("Launching: %s %s\n", chromeExe, strings.Join(args, " "))
@@ -279,6 +324,54 @@ func isPortBindable(port int) bool {
 	}
 	_ = l.Close()
 	return true
+}
+
+// isProfileLocked reports whether the given chrome user-data-dir appears to
+// be owned by a currently-running chrome process. Returns (true, holder)
+// when locked, where holder is a short human-readable description.
+//
+// Detection is best-effort and platform-specific:
+//   - Linux/macOS: chrome creates a `SingletonLock` symlink in the profile
+//     dir whose target encodes "<hostname>-<pid>". Its presence means
+//     "chrome is running on this profile".
+//   - Windows: chrome opens `lockfile` in the profile dir with a deny-write
+//     share mode for as long as the browser is running. We try to open it
+//     for writing — a sharing violation means it's held.
+//
+// If the profile dir doesn't exist yet, it can't be locked.
+func isProfileLocked(profileDir string) (bool, string) {
+	if _, err := os.Stat(profileDir); os.IsNotExist(err) {
+		return false, ""
+	}
+
+	// Linux / macOS: SingletonLock symlink. lstat so we don't follow it
+	// (the target host-pid string is what we want).
+	singleton := filepath.Join(profileDir, "SingletonLock")
+	if info, err := os.Lstat(singleton); err == nil {
+		holder := "SingletonLock present"
+		if info.Mode()&os.ModeSymlink != 0 {
+			if target, err := os.Readlink(singleton); err == nil && target != "" {
+				holder = "SingletonLock -> " + target
+			}
+		}
+		return true, holder
+	}
+
+	// Windows: try to open `lockfile` for writing. If chrome holds it,
+	// we'll get a sharing violation (ERROR_SHARING_VIOLATION). If the
+	// file doesn't exist, no chrome is running on this profile.
+	if runtime.GOOS == "windows" {
+		lockfile := filepath.Join(profileDir, "lockfile")
+		if _, err := os.Stat(lockfile); err == nil {
+			f, err := os.OpenFile(lockfile, os.O_RDWR, 0)
+			if err != nil {
+				return true, fmt.Sprintf("lockfile held (%v)", err)
+			}
+			_ = f.Close()
+		}
+	}
+
+	return false, ""
 }
 
 // findFreePort asks the kernel for an unused TCP port by binding to
