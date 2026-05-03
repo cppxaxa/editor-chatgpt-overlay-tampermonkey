@@ -25,6 +25,7 @@ A Tampermonkey userscript that adds a floating, resizable text editor overlay to
 - **Waiting UI** — Spinner and cancel button in the titlebar while waiting for ChatGPT responses
 - **LLM Job Queue** — All prompts go through a FIFO queue that processes one job at a time. Trigger several generations in a row (e.g. Alt+R on multiple tabs) and they run sequentially in the background — switching tabs does not cancel them. The Cancel button aborts the running job and flushes any queued ones.
 - **System Tray Apps** — Lightweight popup-style apps (e.g. the built-in **Calc**) live in a simulated system tray on the desktop shell instead of getting their own launcher button. Click the tray icon to pop the app open just above the tray with an XP-style balloon tail; click anywhere else to dismiss it without losing state. The up-arrow next to the tray opens an overflow popup with a search box where you can launch any tray app or toggle which icons are visible — your choices persist across reloads.
+- **Open/Close Animation** — Every floating window scales + fades in (120ms) on open and out (100ms) on close, anchored at a fixed bottom-center origin so the motion reads as coming from the taskbar area. Honours `prefers-reduced-motion` — disabled entirely if the OS/browser asks for reduced motion.
 
 ## Installation
 
