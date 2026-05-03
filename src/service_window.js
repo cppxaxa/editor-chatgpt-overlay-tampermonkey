@@ -199,7 +199,39 @@ class ServiceWindow {
         if (!this.container) return;
         this.container.style.display = "flex";
         this.visible = true;
+        /* If the persisted position has drifted off-screen (e.g. browser was
+           resized smaller while the window was closed), pull the window back
+           to the centre of the viewport. Maximised windows are always
+           full-viewport, so they're exempt. */
+        if (this.mode !== "maximized") {
+            this._ensureOnScreen();
+        }
         this.persistState();
+    }
+
+    /* Recenter the window if its current bounds aren't fully inside the
+       viewport. Uses the live offsetWidth/Height (post-layout) rather than
+       the inline style so percentages and "100vw" resolve correctly. */
+    _ensureOnScreen() {
+        const w = this.container.offsetWidth;
+        const h = this.container.offsetHeight;
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+
+        const left = parseInt(this.container.style.left, 10);
+        const top  = parseInt(this.container.style.top,  10);
+
+        const offscreen =
+            isNaN(left) || isNaN(top) ||
+            left < 0 || top < 0 ||
+            left + w > vw || top + h > vh;
+
+        if (offscreen) {
+            const newLeft = Math.max(0, (vw - w) / 2);
+            const newTop  = Math.max(0, (vh - h) / 2);
+            this.container.style.left = newLeft + "px";
+            this.container.style.top  = newTop  + "px";
+        }
     }
 
     hide() {

@@ -50,6 +50,7 @@ function service_taskbar_init() {
     _service_taskbar_build_start_menu();
     _service_taskbar_patch_service_window();
     _service_taskbar_start_clock();
+    _service_taskbar_install_hotkey();
 
     /* Close start menu when clicking outside it. */
     document.addEventListener("mousedown", (e) => {
@@ -109,6 +110,63 @@ function _service_taskbar_build_wallpaper() {
 
 /* ---- Taskbar ---- */
 
+/* Inject the keyframes + selectors that drive the start-button icon
+   animations. Idempotent — guarded by a known id on the <style> tag.
+   The four panes carry different shades of white at rest:
+       TL  #ffffff   (pure white)
+       TR  #f0f0f0   (off-white)
+       BL  #d8d8d8   (silver)
+       BR  #b8b8b8   (light grey)
+   On hover, an animation cycles the shades clockwise so the logo looks
+   like it's rotating. On click, .tm-start-icon-clicked plays a quick
+   stagger flash (TL → TR → BR → BL pulse to bright cyan-white) then
+   settles. */
+function _service_taskbar_inject_styles() {
+
+    if (document.getElementById("tm-taskbar-styles")) return;
+
+    const css =
+        ".tm-pane { transition: fill 180ms ease; }" +
+        ".tm-pane-tl { fill: #ffffff; }" +
+        ".tm-pane-tr { fill: #f0f0f0; }" +
+        ".tm-pane-bl { fill: #d8d8d8; }" +
+        ".tm-pane-br { fill: #b8b8b8; }" +
+
+        /* Hover: each pane runs the same 4-step cycle, but with staggered
+           negative delays so the bright shade walks clockwise around the
+           icon (TL -> TR -> BR -> BL -> TL). */
+        "@keyframes tm-start-rotate {" +
+            "0%   { fill: #ffffff; }" +
+            "25%  { fill: #f0f0f0; }" +
+            "50%  { fill: #d8d8d8; }" +
+            "75%  { fill: #b8b8b8; }" +
+            "100% { fill: #ffffff; }" +
+        "}" +
+        ".tm-start-icon:hover .tm-pane-tl,        .tm-start-btn:hover .tm-pane-tl { animation: tm-start-rotate 1.6s linear infinite;          }" +
+        ".tm-start-icon:hover .tm-pane-tr,        .tm-start-btn:hover .tm-pane-tr { animation: tm-start-rotate 1.6s linear infinite -0.4s;    }" +
+        ".tm-start-icon:hover .tm-pane-br,        .tm-start-btn:hover .tm-pane-br { animation: tm-start-rotate 1.6s linear infinite -0.8s;    }" +
+        ".tm-start-icon:hover .tm-pane-bl,        .tm-start-btn:hover .tm-pane-bl { animation: tm-start-rotate 1.6s linear infinite -1.2s;    }" +
+
+        /* Click: a one-shot stagger flash to bright cyan-white. Each pane
+           uses the same keyframes but a different animation-delay so the
+           bright peak walks TL -> TR -> BR -> BL across ~600ms. */
+        "@keyframes tm-start-flash {" +
+            "0%   { fill: #ffffff; }" +
+            "30%  { fill: #e0f7ff; }" +
+            "60%  { fill: #ffffff; }" +
+            "100% { fill: #ffffff; }" +
+        "}" +
+        ".tm-start-icon-clicked .tm-pane-tl { animation: tm-start-flash 600ms ease-out; }" +
+        ".tm-start-icon-clicked .tm-pane-tr { animation: tm-start-flash 600ms ease-out 80ms; }" +
+        ".tm-start-icon-clicked .tm-pane-br { animation: tm-start-flash 600ms ease-out 160ms; }" +
+        ".tm-start-icon-clicked .tm-pane-bl { animation: tm-start-flash 600ms ease-out 240ms; }";
+
+    const style = document.createElement("style");
+    style.id = "tm-taskbar-styles";
+    style.textContent = css;
+    document.head.appendChild(style);
+}
+
 function _service_taskbar_build_taskbar() {
 
     const bar = document.createElement("div");
@@ -120,9 +178,14 @@ function _service_taskbar_build_taskbar() {
         width: "100vw",
         height: TASKBAR_HEIGHT + "px",
         zIndex: "1000000",
-        background: "rgba(20, 22, 28, 0.92)",
-        borderTop: "1px solid #000",
-        boxShadow: "0 -2px 8px rgba(0,0,0,0.4)",
+        background: "rgba(20, 22, 28, 0.55)",
+        backdropFilter: "blur(18px) saturate(160%)",
+        webkitBackdropFilter: "blur(18px) saturate(160%)",
+        /* Top edge drawn as an inset shadow rather than a real border so child
+           buttons (Start, running-apps, system-tray) with their own background
+           paint over it — letting the Start button visually overlap the
+           taskbar's top edge instead of being cut off by it. */
+        boxShadow: "inset 0 1px 0 rgba(255,255,255,0.12), 0 -2px 12px rgba(0,0,0,0.45)",
         display: "flex",
         alignItems: "stretch",
         color: "white",
@@ -131,31 +194,30 @@ function _service_taskbar_build_taskbar() {
         userSelect: "none"
     });
 
-    /* Start button (leftmost) — sunflower icon + "Start" label */
+    /* Start button (leftmost) — 4-pane white logo + "Start" label.
+       Each pane uses a different shade of white at rest. On hover the panes
+       cycle their shades clockwise (rotation feel). On click the panes flash
+       in a stagger (TL → TR → BR → BL) before settling back. Animations are
+       defined once in service_taskbar_inject_styles(). */
+    _service_taskbar_inject_styles();
+
     const startBtn = document.createElement("button");
+    startBtn.className = "tm-start-btn";
     startBtn.innerHTML =
-        "<svg width='20' height='20' viewBox='0 0 32 32' " +
-        "xmlns='http://www.w3.org/2000/svg' style='vertical-align:middle;margin-right:6px'>" +
-            /* 8 petals around the centre */
-            "<g fill='#ffd54a' stroke='#c98b00' stroke-width='0.8'>" +
-                "<ellipse cx='16' cy='5'  rx='3.2' ry='5.5'/>" +
-                "<ellipse cx='16' cy='27' rx='3.2' ry='5.5'/>" +
-                "<ellipse cx='5'  cy='16' rx='5.5' ry='3.2'/>" +
-                "<ellipse cx='27' cy='16' rx='5.5' ry='3.2'/>" +
-                "<ellipse cx='8'  cy='8'  rx='3.2' ry='5.5' transform='rotate(-45 8 8)'/>" +
-                "<ellipse cx='24' cy='8'  rx='3.2' ry='5.5' transform='rotate(45 24 8)'/>" +
-                "<ellipse cx='8'  cy='24' rx='3.2' ry='5.5' transform='rotate(45 8 24)'/>" +
-                "<ellipse cx='24' cy='24' rx='3.2' ry='5.5' transform='rotate(-45 24 24)'/>" +
-            "</g>" +
-            /* dark seed centre */
-            "<circle cx='16' cy='16' r='5' fill='#5d3a1a' stroke='#2d1a08' stroke-width='0.8'/>" +
-            "<circle cx='14.5' cy='14.5' r='1' fill='#7a4a20'/>" +
+        "<svg class='tm-start-icon' width='20' height='20' viewBox='0 0 24 24' " +
+        "xmlns='http://www.w3.org/2000/svg' " +
+        "style='vertical-align:middle;margin-right:8px'>" +
+            "<rect class='tm-pane tm-pane-tl' x='2'  y='2'  width='9' height='9'/>" +
+            "<rect class='tm-pane tm-pane-tr' x='13' y='2'  width='9' height='9'/>" +
+            "<rect class='tm-pane tm-pane-bl' x='2'  y='13' width='9' height='9'/>" +
+            "<rect class='tm-pane tm-pane-br' x='13' y='13' width='9' height='9'/>" +
         "</svg>" +
         "<span>Start</span>";
     Object.assign(startBtn.style, {
         background: "#1976d2",
         color: "white",
         border: "none",
+        borderRight: "1px solid rgba(255,255,255,0.08)",
         padding: "0 14px",
         cursor: "pointer",
         fontWeight: "bold",
@@ -168,6 +230,13 @@ function _service_taskbar_build_taskbar() {
     startBtn.onmouseout  = () => { startBtn.style.background = "#1976d2"; };
     startBtn.onclick = (e) => {
         e.stopPropagation();
+        /* Re-trigger click animation: remove + force reflow + re-add. */
+        const icon = startBtn.querySelector(".tm-start-icon");
+        if (icon) {
+            icon.classList.remove("tm-start-icon-clicked");
+            void icon.offsetWidth;
+            icon.classList.add("tm-start-icon-clicked");
+        }
         _service_taskbar_toggle_start_menu();
     };
     bar.appendChild(startBtn);
@@ -197,18 +266,27 @@ function _service_taskbar_build_taskbar() {
         borderLeft: "1px solid rgba(255,255,255,0.08)"
     });
 
-    /* Up arrow — placeholder for "more apps" overflow popup */
+    /* Up arrow — Windows-style thin chevron, "Show hidden icons" affordance. */
     const up = document.createElement("button");
-    up.textContent = "▲";
+    up.innerHTML =
+        "<svg width='12' height='12' viewBox='0 0 12 12' " +
+        "xmlns='http://www.w3.org/2000/svg' style='display:block'>" +
+            "<polyline points='2,8 6,4 10,8' fill='none' stroke='currentColor' " +
+            "stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/>" +
+        "</svg>";
     Object.assign(up.style, {
         background: "transparent",
-        color: "#ccc",
+        color: "#e6e6e6",
         border: "none",
         cursor: "pointer",
-        fontSize: "11px",
-        padding: "4px 6px"
+        padding: "6px 8px",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center"
     });
     up.title = "Show hidden icons";
+    up.onmouseover = () => { up.style.background = "rgba(255,255,255,0.08)"; };
+    up.onmouseout  = () => { up.style.background = "transparent"; };
     up.onclick = () => {
         /* TODO: render an overflow popup. For now, no-op. */
     };
@@ -226,16 +304,20 @@ function _service_taskbar_build_taskbar() {
     right.appendChild(tray);
     _taskbar_tray_el = tray;
 
-    /* Clock — date + time, two lines, right-aligned */
+    /* Clock — Windows-style: time on top, date below, both white, Segoe UI,
+       equal weight + size. Two-line stack, right-aligned. */
     const clock = document.createElement("div");
     Object.assign(clock.style, {
         display: "flex",
         flexDirection: "column",
         alignItems: "flex-end",
         justifyContent: "center",
-        fontSize: "11px",
-        lineHeight: "1.2",
-        minWidth: "70px",
+        fontFamily: "'Segoe UI', 'Segoe UI Variable', 'Segoe UI Symbol', system-ui, sans-serif",
+        fontSize: "12px",
+        lineHeight: "1.25",
+        color: "#f0f0f0",
+        minWidth: "78px",
+        padding: "0 4px",
         cursor: "default"
     });
     right.appendChild(clock);
@@ -259,7 +341,7 @@ function _service_taskbar_start_clock() {
         const yy = now.getFullYear();
         _taskbar_clock_el.innerHTML =
             "<div>" + hh + ":" + mm + "</div>" +
-            "<div style='color:#aaa'>" + dd + "/" + mo + "/" + yy + "</div>";
+            "<div>" + dd + "-" + mo + "-" + yy + "</div>";
     };
 
     tick();
@@ -279,10 +361,12 @@ function _service_taskbar_build_start_menu() {
         width: "320px",
         height: "420px",
         zIndex: "1000001",
-        background: "rgba(28, 30, 36, 0.97)",
-        border: "1px solid #000",
+        background: "rgba(28, 30, 36, 0.65)",
+        backdropFilter: "blur(22px) saturate(160%)",
+        webkitBackdropFilter: "blur(22px) saturate(160%)",
+        border: "1px solid rgba(255,255,255,0.12)",
         borderBottom: "none",
-        boxShadow: "0 -4px 20px rgba(0,0,0,0.5)",
+        boxShadow: "0 -4px 24px rgba(0,0,0,0.55)",
         display: "none",
         flexDirection: "column",
         color: "white",
@@ -405,6 +489,23 @@ function _service_taskbar_toggle_start_menu() {
 
 function _service_taskbar_close_start_menu() {
     if (_taskbar_start_menu) _taskbar_start_menu.style.display = "none";
+}
+
+/* Alt+X toggles the start menu. Listener is attached at capture phase on
+   window so it fires regardless of which textarea / iframe-less element
+   currently has focus. preventDefault + stopPropagation prevent the page
+   (or any other component hotkey) from also reacting to the chord. */
+function _service_taskbar_install_hotkey() {
+
+    window.addEventListener("keydown", (e) => {
+        if (!e.altKey) return;
+        if (e.ctrlKey || e.metaKey || e.shiftKey) return;
+        if ((e.key || "").toLowerCase() !== "x") return;
+
+        e.preventDefault();
+        e.stopPropagation();
+        _service_taskbar_toggle_start_menu();
+    }, true);
 }
 
 /* ---- Open-windows tracking ---- */

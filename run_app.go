@@ -166,7 +166,7 @@ func run() error {
 
 	// Give the browser ample time to finish loading chatgpt.com (network,
 	// service workers, hydration) before we start poking it over WebSocket.
-	const preWSDelay = 10 * time.Second
+	const preWSDelay = 6 * time.Second
 	fmt.Printf("Waiting %s before connecting to WebSocket...\n", preWSDelay)
 	time.Sleep(preWSDelay)
 
@@ -672,6 +672,15 @@ func waitForPageReady(wsURL string, timeout time.Duration) error {
 // This is a deliberately minimal RFC 6455 client: single text frame in/out,
 // client-to-server masking, no fragmentation, no extensions, no ping/pong
 // handling beyond the initial response.
+// wsConsecutiveFailures tracks how many WS calls in a row have failed. Reset
+// on every successful exchange. Once it reaches wsMaxFailures the process
+// silently exits — the assumption is the user has closed the browser, so
+// there's no point continuing the injection sequence (every subsequent dial
+// would also fail, spamming the console).
+var wsConsecutiveFailures int
+
+const wsMaxFailures = 10
+
 func wsSendAndReceive(wsURL string, payload []byte) (string, error) {
 	fmt.Printf("[ws] -> %s\n", wsURL)
 	fmt.Printf("[ws] send: %s\n", truncate(string(payload), 800))
@@ -679,8 +688,14 @@ func wsSendAndReceive(wsURL string, payload []byte) (string, error) {
 	resp, err := wsSendAndReceiveInner(wsURL, payload)
 	if err != nil {
 		fmt.Printf("[ws] error: %v\n", err)
+		wsConsecutiveFailures++
+		if wsConsecutiveFailures >= wsMaxFailures {
+			// Browser likely closed. Quiet exit — no stack trace, no banner.
+			os.Exit(0)
+		}
 		return resp, err
 	}
+	wsConsecutiveFailures = 0
 	fmt.Printf("[ws] recv: %s\n", truncate(resp, 800))
 	return resp, nil
 }
