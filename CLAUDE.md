@@ -24,7 +24,9 @@ dist/source.js                   # generated; the file you paste into Tampermonk
 src/
   header.js                      # ==UserScript== banner + IIFE open + 'use strict'
   framework.js                   # global state + framework_init() bootstrap
-  framework_kiosk.js             # handle_kiosk() + component_kiosk() — auto-open + maximize when
+  framework_scrollbars.js        # framework-level scrollbar styling
+  framework_kiosk.js             # handle_kiosk() bootstrap reader (calls component_kiosk())
+  component_kiosk.js             # component_kiosk() — auto-open + maximize when
                                  #   localStorage["kiosk"] === "true" (set by run_app.go)
   component_launcher.js          # the floating "E" button (createLauncher)
   component_window.js            # container/header/min/max/close + drag + resize +
@@ -33,11 +35,16 @@ src/
   component_columns.js           # two-column layout for maximized mode
   component_tabbar.js            # tab switching + simpleHash + getEditorContent +
                                  #   regenerateCurrentTab + per-tab cursor/scroll persistence
-  component_actionbuttons.js     # placeholder (button row currently built inline in createEditor)
+  component_yieldframe.js        # yieldFrame() helper — await two rAFs so the browser can paint
   service_undoredo.js            # UndoRedoStack class + editorUndoRedoStack singleton
                                  #   (.pushUndo, .pushUndoDebounced, .doUndo, .doRedo)
-  component_waitingui.js         # spinner + Cancel button (showWaitingUI / hideWaitingUI)
+  component_waitingui.js         # spinner + Cancel button (showWaitingUI / hideWaitingUI).
+                                 #   Cancel calls flushLlmQueue() then waitAbortController.abort()
   service_dialog.js              # generic modal dialog service (showResultDialog) — reusable
+  service_llm.js                 # LLM service: ChatGPT DOM automation +
+                                 #   sendMessage(prompt) (single-shot, internal-only) +
+                                 #   submitMessage(prompt, onstart, onend) (FIFO queue, one job
+                                 #   at a time) + flushLlmQueue() (drop pending jobs)
   component_linecommand.js       # /p and /r commands + global hotkey dispatcher
                                  #   (handleLineAction, registerLineReaderHotkey, applyIndent)
   component_codecheck.js         # Alt+C code review with ⭐ marker insertion
@@ -45,8 +52,6 @@ src/
   component_tab_question.js      # generateQuestion
   component_tab_snippets.js      # generateSnippets
   component_tab_spreview.js      # generateSpreview + setSpreviewContent
-  component_chatgpt.js           # ChatGPT DOM automation
-                                 #   (sendPromptToChatGPT, waitForAssistantResponse, extractCleanText)
   footer.js                      # framework_init(); IIFE close
 ```
 
@@ -71,7 +76,14 @@ Because everything ends up inside the same IIFE, **JavaScript function-declarati
 - **Inline commands** — `/p <prompt>` sends prompt with full numbered editor context; `/r <prompt>` sends raw prompt. Response replaces the command line in-place. `applyIndent` normalizes indentation (strips common leading whitespace from lines 2+, since `extractCleanText` trims the first line).
 - **Code Check** — sends editor content requesting structured JSON review. Parses response, shows result dialog, inserts `⭐` markers at issue locations. Caches results by code hash.
 - **Waiting UI** — `showWaitingUI` replaces the action buttons area (`tm-action-btns`) with spinner + Cancel button. `hideWaitingUI` restores the buttons by saving/restoring `_savedHTML` and re-attaching click handlers by matching button text content.
-- **ChatGPT DOM automation** — `insertTextIntoChatGPT` types via `execCommand`; `waitForSendButton` polls for send button; `waitForAssistantResponse` watches for new assistant messages (two-phase: wait for new message, then wait for streaming to stop).
+- **ChatGPT DOM automation** — `insertTextIntoChatGPT` types via `execCommand`; `waitForSendButton` polls for send button; `waitForAssistantResponse` watches for new assistant messages (two-phase: wait for new message, then wait for streaming to stop). All of this lives in `service_llm.js`.
+- **LLM job queue (`service_llm.js`)** — All component-level LLM calls go through `submitMessage(prompt, onstart, onend)`, which enqueues a job and processes the queue strictly one-at-a-time:
+  - `onstart(ctx)` is invoked when the job actually leaves the queue and is about to be dispatched to ChatGPT — this is the right place to set up `waitAbortController` and call `showWaitingUI()`.
+  - `onend(ctx)` is invoked when the job finishes (success, error, or cancel). `ctx = { prompt, result, error, cancelled }`. Tear down UI state here.
+  - `submitMessage` returns a Promise that resolves with the same `ctx` passed to `onend`, so callers may `await` it instead of (or in addition to) using callbacks.
+  - `flushLlmQueue()` drops every PENDING job, calling each one's `onend({ cancelled: true })` and resolving its promise. The currently-running job is NOT touched — it is interrupted via the existing `waitAbortController.abort()` path.
+  - Cancel button (`component_waitingui.js`) calls `flushLlmQueue()` then `waitAbortController.abort()`. **Tab switching does NOT cancel jobs** — generations run to completion in the background, and their `onend` writes to the cache regardless of which tab is active (the textarea-write step is gated on `activeTab === "<owner>"` so the user only sees a visible update if they're still on the relevant tab).
+  - `sendMessage(prompt)` is internal — only the queue drain calls it. New code should always use `submitMessage`.
 - **Response cleaning** (`extractCleanText`) — clones response DOM, strips sticky headers/copy buttons, extracts CodeMirror content preserving line breaks, removes markdown fences. **Note:** returns trimmed text, so first line loses leading whitespace — `applyIndent` accounts for this.
 - **State persistence** — Editor content in `localStorage["tm_editor_content"]`, window geometry/mode in `localStorage["tm_editor_window_state"]`, tab caches in `localStorage["tm_ascii_cache"]` etc.
 

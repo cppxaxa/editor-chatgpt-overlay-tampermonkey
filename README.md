@@ -23,6 +23,7 @@ A Tampermonkey userscript that adds a floating, resizable text editor overlay to
 - **Smart Indentation** — Auto-indent on Enter, Tab inserts 4 spaces, Shift+Tab removes indentation
 - **Title Bar Buttons** — "↻ Regenerate", "Command", "Check", and "GitHub" buttons in the header for mouse-driven access
 - **Waiting UI** — Spinner and cancel button in the titlebar while waiting for ChatGPT responses
+- **LLM Job Queue** — All prompts go through a FIFO queue that processes one job at a time. Trigger several generations in a row (e.g. Alt+R on multiple tabs) and they run sequentially in the background — switching tabs does not cancel them. The Cancel button aborts the running job and flushes any queued ones.
 
 ## Installation
 
@@ -281,23 +282,26 @@ The build tool:
 src/
   header.js                   # ==UserScript== banner + IIFE open
   framework.js                # global state + framework_init()
-  framework_kiosk.js          # kiosk-mode bootstrap (handle_kiosk / component_kiosk)
+  framework_scrollbars.js     # framework-level scrollbar styling
+  framework_kiosk.js          # kiosk-mode bootstrap reader (calls component_kiosk)
+  component_kiosk.js          # auto-open + maximize when properties.kiosk = true
   component_launcher.js       # the "E" button
   component_window.js         # floating window: header, drag, resize, min/max/close, master createEditor()
   component_editor.js         # shared editor keydown (auto-indent, Tab, Ctrl+Z/Y dispatch)
   component_columns.js        # two-column layout for maximized mode
   component_tabbar.js         # tab switching + per-tab cursor/scroll state
-  component_actionbuttons.js  # (placeholder)
-  component_undoredo.js       # custom undo/redo stack
-  component_waitingui.js      # spinner + Cancel button
+  component_yieldframe.js     # yieldFrame() helper (await two rAFs)
+  service_undoredo.js         # custom undo/redo stack
+  component_waitingui.js      # spinner + Cancel button (Cancel flushes the LLM queue)
   service_dialog.js           # generic modal dialog service (reusable)
+  service_llm.js              # ChatGPT DOM automation + submitMessage(prompt, onstart, onend)
+                              #   FIFO queue, one job at a time + flushLlmQueue()
   component_linecommand.js    # /p, /r commands + global hotkey dispatcher
   component_codecheck.js      # Alt+C review with ⭐ markers
   component_tab_ascii.js      # ASCII diagram tab
   component_tab_question.js   # Question tab
   component_tab_snippets.js   # Snippets tab
   component_tab_spreview.js   # S-Preview tab (iframe + srcdoc)
-  component_chatgpt.js        # ChatGPT DOM automation
   footer.js                   # framework_init() + IIFE close
 build.go                      # concatenator (Go stdlib only)
 build.sh, build.cmd           # one-line wrappers
