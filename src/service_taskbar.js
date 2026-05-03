@@ -717,12 +717,35 @@ function _service_taskbar_close_start_menu() {
 
 /* Alt+X toggles the start menu. Alt+W closes the active window (the most
    recently shown / mousedown'd ServiceWindow — see ServiceWindow._active).
+   Ctrl+1..9 launches the Nth visible system-tray app (left to right) by
+   simulating a click on its tray button — same path as a real user click,
+   so tray-mode windows toggle and ServiceWindow tray-anchoring still works.
    Listener attached at capture phase on window so it fires regardless of
    which textarea / button currently has focus. preventDefault +
    stopPropagation prevent the page from also reacting to the chord. */
 function _service_taskbar_install_hotkey() {
 
     window.addEventListener("keydown", (e) => {
+
+        /* Ctrl+1..9 — click the Nth visible tray app. Bare Ctrl only (no
+           Alt/Meta/Shift) so we don't collide with browser tab-switch
+           shortcuts that include other modifiers. */
+        if (e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
+            const n = parseInt(e.key, 10);
+            if (n >= 1 && n <= 9) {
+                if (!_taskbar_tray_el) return;
+                const buttons = Array.from(_taskbar_tray_el.children)
+                    .filter(b => b.offsetParent !== null);
+                const target = buttons[n - 1];
+                if (target) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    target.click();
+                }
+            }
+            return;
+        }
+
         if (!e.altKey) return;
         if (e.ctrlKey || e.metaKey || e.shiftKey) return;
 

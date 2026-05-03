@@ -4278,12 +4278,35 @@ function _service_taskbar_close_start_menu() {
 
 /* Alt+X toggles the start menu. Alt+W closes the active window (the most
    recently shown / mousedown'd ServiceWindow — see ServiceWindow._active).
+   Ctrl+1..9 launches the Nth visible system-tray app (left to right) by
+   simulating a click on its tray button — same path as a real user click,
+   so tray-mode windows toggle and ServiceWindow tray-anchoring still works.
    Listener attached at capture phase on window so it fires regardless of
    which textarea / button currently has focus. preventDefault +
    stopPropagation prevent the page from also reacting to the chord. */
 function _service_taskbar_install_hotkey() {
 
     window.addEventListener("keydown", (e) => {
+
+        /* Ctrl+1..9 — click the Nth visible tray app. Bare Ctrl only (no
+           Alt/Meta/Shift) so we don't collide with browser tab-switch
+           shortcuts that include other modifiers. */
+        if (e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
+            const n = parseInt(e.key, 10);
+            if (n >= 1 && n <= 9) {
+                if (!_taskbar_tray_el) return;
+                const buttons = Array.from(_taskbar_tray_el.children)
+                    .filter(b => b.offsetParent !== null);
+                const target = buttons[n - 1];
+                if (target) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    target.click();
+                }
+            }
+            return;
+        }
+
         if (!e.altKey) return;
         if (e.ctrlKey || e.metaKey || e.shiftKey) return;
 
@@ -5550,6 +5573,44 @@ class ServiceWindow {
         }
 
         this.persistState();
+
+        /* Auto-focus the first text input inside the window so the user can
+           start typing immediately after a tray click / Ctrl+1..9 launch.
+           rAF lets layout settle (the snap above just changed left/top) so
+           focus() doesn't trigger a scroll-into-view glitch on the page
+           underneath. Skip if focus already landed inside the window
+           between show() and this rAF tick. */
+        requestAnimationFrame(() => {
+            if (!this.visible || !this.container) return;
+            const ae = document.activeElement;
+            if (ae && ae !== document.body && this.container.contains(ae)) return;
+            this._focusFirstInput();
+        });
+    }
+
+    /* Find and focus the first visible input/textarea/contenteditable inside
+       the container. Selects existing text on <input type=text|number> and
+       <textarea> so the user can overwrite immediately. Used by tray-mode
+       openers (_toggleFromTray); safe to call any time. */
+    _focusFirstInput() {
+        if (!this.container) return;
+        const sel = "input:not([type=hidden]):not([disabled]):not([readonly])," +
+                    "textarea:not([disabled]):not([readonly])," +
+                    "[contenteditable=\"true\"]";
+        const candidates = this.container.querySelectorAll(sel);
+        for (const el of candidates) {
+            if (el.offsetParent === null) continue;   // hidden subtree
+            try {
+                el.focus({ preventScroll: true });
+                if (typeof el.select === "function" &&
+                    (el.tagName === "TEXTAREA" ||
+                     (el.tagName === "INPUT" &&
+                      /^(text|number|search|email|url|tel|password)$/i.test(el.type)))) {
+                    el.select();
+                }
+            } catch (e) {}
+            return;
+        }
     }
 
     /* ---- Active window tracking ----

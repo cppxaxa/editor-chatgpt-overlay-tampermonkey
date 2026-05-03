@@ -435,6 +435,44 @@ class ServiceWindow {
         }
 
         this.persistState();
+
+        /* Auto-focus the first text input inside the window so the user can
+           start typing immediately after a tray click / Ctrl+1..9 launch.
+           rAF lets layout settle (the snap above just changed left/top) so
+           focus() doesn't trigger a scroll-into-view glitch on the page
+           underneath. Skip if focus already landed inside the window
+           between show() and this rAF tick. */
+        requestAnimationFrame(() => {
+            if (!this.visible || !this.container) return;
+            const ae = document.activeElement;
+            if (ae && ae !== document.body && this.container.contains(ae)) return;
+            this._focusFirstInput();
+        });
+    }
+
+    /* Find and focus the first visible input/textarea/contenteditable inside
+       the container. Selects existing text on <input type=text|number> and
+       <textarea> so the user can overwrite immediately. Used by tray-mode
+       openers (_toggleFromTray); safe to call any time. */
+    _focusFirstInput() {
+        if (!this.container) return;
+        const sel = "input:not([type=hidden]):not([disabled]):not([readonly])," +
+                    "textarea:not([disabled]):not([readonly])," +
+                    "[contenteditable=\"true\"]";
+        const candidates = this.container.querySelectorAll(sel);
+        for (const el of candidates) {
+            if (el.offsetParent === null) continue;   // hidden subtree
+            try {
+                el.focus({ preventScroll: true });
+                if (typeof el.select === "function" &&
+                    (el.tagName === "TEXTAREA" ||
+                     (el.tagName === "INPUT" &&
+                      /^(text|number|search|email|url|tel|password)$/i.test(el.type)))) {
+                    el.select();
+                }
+            } catch (e) {}
+            return;
+        }
     }
 
     /* ---- Active window tracking ----
