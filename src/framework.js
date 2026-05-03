@@ -14,8 +14,24 @@ let waitAbortController = null;
 
 /* ---- Bootstrap ---- */
 
+function framework_register_launcher() {
+
+    framework_launcher_register("E", () => {
+
+        if (!container) createEditor();
+
+        container.style.display = "flex";
+
+        /* If restored as maximized, the initial split happened before the
+           container was visible (offsetHeight was 0). Re-split now. */
+        if (windowMode === "maximized") redistributeColumns();
+    });
+}
+
 function framework_init() {
-    createLauncher();
+
+    framework_register_launcher();
+
     registerLineReaderHotkey();
 
     window.addEventListener("resize", () => {

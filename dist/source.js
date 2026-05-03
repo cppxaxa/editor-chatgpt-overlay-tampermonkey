@@ -39,8 +39,24 @@ let waitAbortController = null;
 
 /* ---- Bootstrap ---- */
 
+function framework_register_launcher() {
+
+    framework_launcher_register("E", () => {
+
+        if (!container) createEditor();
+
+        container.style.display = "flex";
+
+        /* If restored as maximized, the initial split happened before the
+           container was visible (offsetHeight was 0). Re-split now. */
+        if (windowMode === "maximized") redistributeColumns();
+    });
+}
+
 function framework_init() {
-    createLauncher();
+
+    framework_register_launcher();
+
     registerLineReaderHotkey();
 
     window.addEventListener("resize", () => {
@@ -536,46 +552,6 @@ function component_kiosk() {
     /* If we ended up maximized (just now or already), re-split the columns
        since the launcher path does the same when restoring. */
     if (windowMode === "maximized") redistributeColumns();
-}
-
-// ===== src/component_launcher.js =====
-// -----------------------------------------------------------------------------
-// component_launcher.js — the floating "E" button that opens the editor.
-// -----------------------------------------------------------------------------
-
-function createLauncher() {
-
-    const btn = document.createElement("button");
-
-    btn.textContent = "E";
-
-    Object.assign(btn.style, {
-        position: "fixed",
-        left: "10px",
-        bottom: "90px",
-        zIndex: "999999",
-        width: "28px",
-        height: "28px",
-        background: "#202123",
-        color: "white",
-        border: "1px solid #444",
-        borderRadius: "6px",
-        cursor: "pointer",
-        fontWeight: "bold"
-    });
-
-    btn.onclick = () => {
-
-        if (!container) createEditor();
-
-        container.style.display = "flex";
-
-        /* If restored as maximized, the initial split happened before the
-           container was visible (offsetHeight was 0). Re-split now. */
-        if (windowMode === "maximized") redistributeColumns();
-    };
-
-    document.body.appendChild(btn);
 }
 
 // ===== src/component_linecommand.js =====
@@ -2005,6 +1981,64 @@ function handle_kiosk() {
     } catch (e) {
         // localStorage may be unavailable in restricted contexts; ignore.
     }
+}
+
+// ===== src/framework_launcher.js =====
+// -----------------------------------------------------------------------------
+// framework_launcher.js — framework-level launcher button registry.
+//
+// Any component that wants a fixed-position floating launcher button (like
+// the editor's "E") calls:
+//
+//     framework_launcher_register("E", () => { ... open my thing ... });
+//
+// Multiple registrations stack vertically in the bottom-left corner — each
+// new button sits one slot above the previous one. The registry owns all
+// styling so every launcher button looks identical.
+// -----------------------------------------------------------------------------
+
+const FRAMEWORK_LAUNCHER_SIZE = 28;       // button width/height in px
+const FRAMEWORK_LAUNCHER_GAP = 6;         // gap between stacked buttons in px
+const FRAMEWORK_LAUNCHER_BASE_BOTTOM = 90; // px from viewport bottom for the first slot
+const FRAMEWORK_LAUNCHER_LEFT = 10;        // px from viewport left
+
+let _framework_launcher_count = 0;
+
+function framework_launcher_register(textContent, onlaunch) {
+
+    const slotIndex = _framework_launcher_count;
+    _framework_launcher_count++;
+
+    const bottom = FRAMEWORK_LAUNCHER_BASE_BOTTOM
+        + slotIndex * (FRAMEWORK_LAUNCHER_SIZE + FRAMEWORK_LAUNCHER_GAP);
+
+    const btn = document.createElement("button");
+
+    btn.textContent = textContent;
+
+    Object.assign(btn.style, {
+        position: "fixed",
+        left: FRAMEWORK_LAUNCHER_LEFT + "px",
+        bottom: bottom + "px",
+        zIndex: "999999",
+        width: FRAMEWORK_LAUNCHER_SIZE + "px",
+        height: FRAMEWORK_LAUNCHER_SIZE + "px",
+        background: "#202123",
+        color: "white",
+        border: "1px solid #444",
+        borderRadius: "6px",
+        cursor: "pointer",
+        fontWeight: "bold"
+    });
+
+    btn.onclick = () => {
+        if (typeof onlaunch === "function") {
+            try { onlaunch(); }
+            catch (e) { console.error("framework_launcher onlaunch threw:", e); }
+        }
+    };
+
+    document.body.appendChild(btn);
 }
 
 // ===== src/framework_scrollbars.js =====

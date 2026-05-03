@@ -23,12 +23,15 @@ appsettings.json                 # config consumed by run_app.go (chrome path, p
 dist/source.js                   # generated; the file you paste into Tampermonkey
 src/
   header.js                      # ==UserScript== banner + IIFE open + 'use strict'
-  framework.js                   # global state + framework_init() bootstrap
+  framework.js                   # global state + framework_init() bootstrap +
+                                 #   framework_register_launcher() (registers the "E" launcher)
   framework_scrollbars.js        # framework-level scrollbar styling
   framework_kiosk.js             # handle_kiosk() bootstrap reader (calls component_kiosk())
+  framework_launcher.js          # framework_launcher_register(text, onlaunch) — registry for
+                                 #   floating bottom-left launcher buttons; multiple registrations
+                                 #   stack vertically
   component_kiosk.js             # component_kiosk() — auto-open + maximize when
                                  #   localStorage["kiosk"] === "true" (set by run_app.go)
-  component_launcher.js          # the floating "E" button (createLauncher)
   component_window.js            # container/header/min/max/close + drag + resize +
                                  #   geometry persistence + master createEditor() wiring
   component_editor.js            # shared keydown handling (attachEditorKeydown)
@@ -69,7 +72,7 @@ Because everything ends up inside the same IIFE, **JavaScript function-declarati
 ### Runtime architecture (within the concatenated IIFE)
 
 - **Global state** at the top of `framework.js` — DOM refs (`container`, `textarea`, `headerEl`, `columnContainer`, `leftTA`, `rightTA`, tab buttons, tab content elements), tab system vars (`activeTab`, per-tab caches), undo/redo stacks, per-tab cursor/scroll state (`tabState`).
-- **`framework_init()`** in `footer.js` calls `createLauncher() + registerLineReaderHotkey() + window.onresize + style injection + handle_kiosk()`. This is the only entry point.
+- **`framework_init()`** in `footer.js` calls `framework_register_launcher() + registerLineReaderHotkey() + window.onresize + style injection + framework_scrollbars_inject() + handle_kiosk()`. This is the only entry point. `framework_register_launcher()` (also in `framework.js`) is a thin wrapper that calls `framework_launcher_register("E", ...)` to wire the editor's open-on-click behavior — extract it to its own helper so adding more launcher buttons later is a one-liner.
 - **`createEditor()`** in `component_window.js` is the master DOM builder — it constructs the floating window, header, tabs, action buttons, main textarea, two column textareas, ascii/question/snippets textareas, S-Preview iframe, and wires the min/max/close/drag/resize handlers. It is called lazily on first launcher click.
 - **Tab system** — five tabs (Editor, Ascii design, Question, Snippets, S-Preview). Each generated tab caches `{ hash, content }` in both memory and localStorage. `simpleHash` (djb2) detects code changes; regeneration only happens when hash differs (or explicitly via Alt+R which clears the cache first).
 - **S-Preview** uses an iframe with `srcdoc` for isolated syntax-highlighted HTML rendering. `setSpreviewContent` injects a CSS reset to preserve indentation.
