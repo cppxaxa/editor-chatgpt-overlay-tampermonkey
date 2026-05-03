@@ -6,11 +6,18 @@
 //     service_toast_show(message, opts)
 //         opts = {
 //             duration: 3000,           // ms, default 3000
-//             location: "bottom-right", // top-left|top-right|bottom-left|
-//                                       // bottom-right|top-center|bottom-center
 //             title:    null,           // optional bold heading line
-//             icon:     null            // optional emoji/SVG (defaults per type)
+//             icon:     null            // optional emoji/SVG glyph
 //         }
+//
+//     The on-screen location of all toasts is chosen by the USER from the
+//     notifications pane (clock click) — callers cannot override it. The
+//     selection persists in localStorage["tm_toast_location"].
+//
+//     service_toast_get_default_location() / _set_default_location(loc)
+//         Programmatic access to the persisted picker value. Valid values:
+//         top-left, top-center, top-right, bottom-left, bottom-center,
+//         bottom-right.
 //
 //     service_toast_clear_history()
 //         Wipes localStorage["tm_toast_history"].
@@ -27,13 +34,33 @@
 // clock click handler and pre-creates the history pane (hidden).
 // -----------------------------------------------------------------------------
 
-const TOAST_HISTORY_KEY = "tm_toast_history";
-const TOAST_HISTORY_MAX = 50;
+const TOAST_HISTORY_KEY  = "tm_toast_history";
+const TOAST_LOCATION_KEY = "tm_toast_location";
+const TOAST_HISTORY_MAX  = 50;
 
 const TOAST_VALID_LOCATIONS = [
-    "top-left", "top-right", "bottom-left",
-    "bottom-right", "top-center", "bottom-center"
+    "top-left", "top-center", "top-right",
+    "bottom-left", "bottom-center", "bottom-right"
 ];
+
+const TOAST_DEFAULT_LOCATION = "bottom-right";
+
+/* User-selectable default location, persisted in localStorage. Used when
+   service_toast_show() is called without an explicit `location` opt — so the
+   user's pick from the notifications pane controls where ALL toasts land. */
+function service_toast_get_default_location() {
+    try {
+        const v = localStorage.getItem(TOAST_LOCATION_KEY);
+        if (TOAST_VALID_LOCATIONS.indexOf(v) >= 0) return v;
+    } catch (e) {}
+    return TOAST_DEFAULT_LOCATION;
+}
+
+function service_toast_set_default_location(loc) {
+    if (TOAST_VALID_LOCATIONS.indexOf(loc) < 0) return;
+    try { localStorage.setItem(TOAST_LOCATION_KEY, loc); } catch (e) {}
+    if (_toast_history_open) _service_toast_rebuild_location_picker();
+}
 
 /* One stack container per location. Lazily created on first use. Each
    container is a fixed-position div that lays out its toast children
@@ -202,8 +229,7 @@ function service_toast_show(message, opts) {
     opts = opts || {};
     const duration = (typeof opts.duration === "number" && opts.duration > 0)
         ? opts.duration : 3000;
-    const location = TOAST_VALID_LOCATIONS.indexOf(opts.location) >= 0
-        ? opts.location : "bottom-right";
+    const location = service_toast_get_default_location();
     const title = opts.title || null;
     const icon  = (typeof opts.icon === "string" && opts.icon.length > 0)
         ? opts.icon : "💬";
@@ -378,7 +404,42 @@ function _service_toast_build_history_pane() {
     header.appendChild(btnRow);
     pane.appendChild(header);
 
-    /* Scrollable list */
+    /* ---- Location picker ----
+       3x2 grid of corner/edge buttons mirroring the screen. The currently-
+       selected slot is highlighted with the cyan accent used elsewhere in
+       the shell. Clicking a slot persists the choice immediately and any
+       subsequent toast lands at that anchor. */
+    const pickerWrap = document.createElement("div");
+    pickerWrap.className = "tm-toast-location-picker";
+    Object.assign(pickerWrap.style, {
+        padding:        "10px 14px 12px",
+        borderBottom:   "1px solid rgba(255,255,255,0.08)"
+    });
+
+    const pickerLabel = document.createElement("div");
+    pickerLabel.textContent = "Toast location";
+    Object.assign(pickerLabel.style, {
+        fontSize:     "11px",
+        color:        "#9aa0aa",
+        textTransform: "uppercase",
+        letterSpacing: "0.6px",
+        marginBottom: "8px"
+    });
+    pickerWrap.appendChild(pickerLabel);
+
+    const grid = document.createElement("div");
+    grid.className = "tm-toast-location-grid";
+    Object.assign(grid.style, {
+        display:             "grid",
+        gridTemplateColumns: "1fr 1fr 1fr",
+        gridTemplateRows:    "32px 32px",
+        gap:                 "6px"
+    });
+    pickerWrap.appendChild(grid);
+
+    pane.appendChild(pickerWrap);
+
+    /* ---- Scrollable list ---- */
     const list = document.createElement("div");
     list.className = "tm-toast-history-list";
     Object.assign(list.style, {
@@ -390,7 +451,100 @@ function _service_toast_build_history_pane() {
 
     document.body.appendChild(pane);
     _toast_history_pane = pane;
+    _service_toast_rebuild_location_picker();
     return pane;
+}
+
+/* Render the 3x2 location-picker grid inside the history pane. Order
+   matches screen geometry: top row = top-left, top-center, top-right;
+   bottom row = bottom-left, bottom-center, bottom-right. The active
+   choice carries the cyan accent + brighter background. Clicking a slot
+   persists the new value and lights up the matching button. */
+function _service_toast_rebuild_location_picker() {
+
+    if (!_toast_history_pane) return;
+    const grid = _toast_history_pane.querySelector(".tm-toast-location-grid");
+    if (!grid) return;
+
+    grid.innerHTML = "";
+    const current = service_toast_get_default_location();
+
+    const labels = {
+        "top-left":      "↖",
+        "top-center":    "↑",
+        "top-right":     "↗",
+        "bottom-left":   "↙",
+        "bottom-center": "↓",
+        "bottom-right":  "↘"
+    };
+    const titles = {
+        "top-left":      "Top left",
+        "top-center":    "Top center",
+        "top-right":     "Top right",
+        "bottom-left":   "Bottom left",
+        "bottom-center": "Bottom center",
+        "bottom-right":  "Bottom right"
+    };
+
+    /* Render in row-major screen order so the grid visually mirrors the
+       screen — top row first, bottom row second. */
+    const order = [
+        "top-left", "top-center", "top-right",
+        "bottom-left", "bottom-center", "bottom-right"
+    ];
+
+    order.forEach(loc => {
+        const btn = document.createElement("button");
+        const active = loc === current;
+
+        btn.title = titles[loc];
+        btn.innerHTML =
+            "<span style='font-size:14px;line-height:1;'>" + labels[loc] + "</span>" +
+            "<span style='font-size:9.5px;letter-spacing:0.3px;opacity:0.85;'>" +
+                titles[loc].replace(" ", "·") +
+            "</span>";
+
+        Object.assign(btn.style, {
+            display:        "flex",
+            flexDirection:  "column",
+            alignItems:     "center",
+            justifyContent: "center",
+            gap:            "1px",
+            background:     active
+                ? "rgba(79,195,247,0.20)"
+                : "rgba(255,255,255,0.05)",
+            color:          active ? "#ffffff" : "#dadce3",
+            border:         active
+                ? "1px solid rgba(79,195,247,0.55)"
+                : "1px solid rgba(255,255,255,0.10)",
+            borderRadius:   "5px",
+            cursor:         "pointer",
+            fontFamily:     "inherit",
+            padding:        "0",
+            boxShadow:      active
+                ? "0 0 0 1px rgba(79,195,247,0.25), inset 0 1px 0 rgba(255,255,255,0.10)"
+                : "none",
+            transition:     "background 120ms ease"
+        });
+
+        if (!active) {
+            btn.onmouseover = () => { btn.style.background = "rgba(255,255,255,0.10)"; };
+            btn.onmouseout  = () => { btn.style.background = "rgba(255,255,255,0.05)"; };
+        }
+
+        btn.onclick = () => {
+            service_toast_set_default_location(loc);
+            /* Quick confirmation toast at the new anchor so the user sees
+               where future toasts will land. */
+            service_toast_show("Toasts will appear here", {
+                title:    "Location",
+                icon:     "📍",
+                duration: 1800
+            });
+        };
+
+        grid.appendChild(btn);
+    });
 }
 
 function _service_toast_format_time(ts) {
@@ -473,6 +627,7 @@ function _service_toast_rebuild_history_list() {
 function _service_toast_open_history_pane() {
     const pane = _service_toast_build_history_pane();
     _service_toast_rebuild_history_list();
+    _service_toast_rebuild_location_picker();
     pane.style.display = "flex";
     pane.style.animation = "tm-toast-pane-in 220ms cubic-bezier(0.2,0.7,0.2,1) both";
     _toast_history_open = true;

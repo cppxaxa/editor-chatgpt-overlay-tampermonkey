@@ -79,12 +79,22 @@ class ServiceMenu {
         this.close();
 
         const popup = document.createElement("div");
+        /* z-index: ServiceMenu is a transient popup that must paint above
+           every other shell layer — the focused window (ServiceWindow uses
+           a live ._zCounter that grows on every focus), the Start menu
+           (which itself syncs to _zCounter + 10 on open), and the
+           notifications pane (z=1000060). Sync past the live max so a
+           ServiceMenu opened from the Start menu's arrow lands ON TOP of
+           the Start menu instead of behind it. */
+        const baseZ = (typeof ServiceWindow !== "undefined" && ServiceWindow._zCounter)
+            ? (ServiceWindow._zCounter + 20)
+            : 1000020;
         Object.assign(popup.style, {
             position: "fixed",
             left: x + "px",
             top:  y + "px",
             minWidth: "200px",
-            zIndex: "1000010",
+            zIndex: String(baseZ),
             background: "rgba(28, 30, 36, 0.78)",
             backdropFilter: "blur(22px) saturate(160%)",
             webkitBackdropFilter: "blur(22px) saturate(160%)",

@@ -171,8 +171,7 @@ function _chat_do_send() {
                     service_toast_show(preview, {
                         title:    "LLM",
                         icon:     "💬",
-                        duration: 3000,
-                        location: "bottom-right"
+                        duration: 3000
                     });
                 }
             }
