@@ -6,9 +6,9 @@
 
 /* ---- Window-owned state ----
    These are populated by createEditor() and read by other components. The
-   window component is the sole writer; everyone else is a reader. */
-
-const EDITOR_STATE_KEY = "tm_editor_window_state";
+   window component is the sole writer; everyone else is a reader.
+   Geometry/mode/visibility are persisted by ServiceWindow itself under the
+   key "tm_window_editor" (derived from the appName passed to .create()). */
 
 let container;
 let textarea;
@@ -23,7 +23,13 @@ let editorServiceWindow = null;
 
 function component_window_launch() {
     if (!container) createEditor();
-    container.style.display = "flex";
+    editorServiceWindow.show();
+}
+
+function component_window_handle_init() {
+    /* Register with the system-restore registry so framework_system_restore.js
+       can re-open the editor at boot if it was visible last session. */
+    ServiceWindow.registerApp("editor", component_window_launch);
 }
 
 function component_window_handle_launcher_registered() {
@@ -40,12 +46,11 @@ function createEditor() {
 
     editorServiceWindow = new ServiceWindow();
     editorServiceWindow.create({
+        appName: "editor",
         width:  500,
         height: 350,
         isDraggable: () => editorServiceWindow.mode !== "maximized",
-        isResizable: () => editorServiceWindow.mode === "normal",
-        onDragEnd:   saveEditorState,
-        onResizeEnd: saveEditorState
+        isResizable: () => editorServiceWindow.mode === "normal"
     });
 
     container    = editorServiceWindow.container;
@@ -379,39 +384,27 @@ function centerEditor() {
 }
 
 /* ---- Geometry persistence ----
-   Generic geometry round-trip lives in service_window.js; the editor-specific
-   side-effects (entering maximized column layout, hiding the textarea when
-   minimized) stay here because they depend on tab content elements. */
+   ServiceWindow auto-persists geometry/mode/visibility to the localStorage
+   key derived from appName. These wrappers add the editor-specific
+   side-effects (entering maximized column layout, hiding tab content
+   elements when minimized) that the class can't know about. */
 
 function saveEditorState() {
     if (!editorServiceWindow) return;
-    service_window_persist_geometry(EDITOR_STATE_KEY, container, {
-        windowMode:     editorServiceWindow.mode,
-        previousBounds: editorServiceWindow.previousBounds
-    });
+    editorServiceWindow.persistState();
 }
 
 function restoreEditorState() {
 
-    const state = service_window_restore_geometry(EDITOR_STATE_KEY, container);
+    const state = editorServiceWindow.restoreState();
     if (!state) return false;
 
-    editorServiceWindow.mode           = state.windowMode    || "normal";
-    editorServiceWindow.previousBounds = state.previousBounds || null;
-
     if (editorServiceWindow.mode === "maximized") {
-        container.style.left = "0";
-        container.style.top = "0";
-        container.style.width = "100vw";
-        container.style.height = "100vh";
-        resizeHandle.style.display = "none";
         enterMaximizedColumnLayout();
     }
 
     if (editorServiceWindow.mode === "minimized") {
         textarea.style.display = "none";
-        container.style.height = "36px";
-        resizeHandle.style.display = "none";
     }
 
     return true;

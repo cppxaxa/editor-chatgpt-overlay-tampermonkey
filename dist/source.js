@@ -59,6 +59,8 @@ function framework_on_init() {
 
     component_waitingui_handle_init();
     component_linecommand_handle_init();
+    component_window_handle_init();
+    component_calc_handle_init();
 }
 
 function framework_init() {
@@ -69,6 +71,7 @@ function framework_init() {
     framework_on_init();
 
     handle_kiosk();
+    handle_system_restore();
 }
 
 // ===== src/component_calc.js =====
@@ -85,19 +88,21 @@ let calcContainer     = null;
 
 function component_calc_launch() {
     if (!calcContainer) component_calc_create();
-    calcContainer.style.display = "flex";
+    calcServiceWindow.show();
 }
 
 function component_calc_create() {
 
     calcServiceWindow = new ServiceWindow();
     calcServiceWindow.create({
+        appName: "calc",
         width:  320,
         height: 200,
-        title:  "Calc",
         isDraggable: () => true,
         isResizable: () => true
     });
+
+    calcServiceWindow.registerTab({ id: "calc", label: "Calc" });
 
     /* Min/max/close cluster — defaults from ServiceWindow are fine for a
        minimal demo (close hides the container; max toggles fullscreen; min
@@ -130,8 +135,17 @@ function component_calc_create() {
     body.appendChild(sumBtn);
     body.appendChild(resultLabel);
 
-    /* Center on first show. */
-    service_window_center(calcContainer, 320, 200);
+    /* Restore previously saved geometry/mode; otherwise center. */
+    if (!calcServiceWindow.restoreState()) {
+        service_window_center(calcContainer, 320, 200);
+    }
+}
+
+/* Framework lifecycle reactor — registers calc with the system-restore
+   registry so framework_system_restore.js can re-open this window at boot
+   if it was visible in the last session. Called from framework_on_init(). */
+function component_calc_handle_init() {
+    ServiceWindow.registerApp("calc", component_calc_launch);
 }
 
 // ===== src/component_codecheck.js =====
@@ -1339,9 +1353,9 @@ function hideWaitingUI() {
 
 /* ---- Window-owned state ----
    These are populated by createEditor() and read by other components. The
-   window component is the sole writer; everyone else is a reader. */
-
-const EDITOR_STATE_KEY = "tm_editor_window_state";
+   window component is the sole writer; everyone else is a reader.
+   Geometry/mode/visibility are persisted by ServiceWindow itself under the
+   key "tm_window_editor" (derived from the appName passed to .create()). */
 
 let container;
 let textarea;
@@ -1356,7 +1370,13 @@ let editorServiceWindow = null;
 
 function component_window_launch() {
     if (!container) createEditor();
-    container.style.display = "flex";
+    editorServiceWindow.show();
+}
+
+function component_window_handle_init() {
+    /* Register with the system-restore registry so framework_system_restore.js
+       can re-open the editor at boot if it was visible last session. */
+    ServiceWindow.registerApp("editor", component_window_launch);
 }
 
 function component_window_handle_launcher_registered() {
@@ -1373,12 +1393,11 @@ function createEditor() {
 
     editorServiceWindow = new ServiceWindow();
     editorServiceWindow.create({
+        appName: "editor",
         width:  500,
         height: 350,
         isDraggable: () => editorServiceWindow.mode !== "maximized",
-        isResizable: () => editorServiceWindow.mode === "normal",
-        onDragEnd:   saveEditorState,
-        onResizeEnd: saveEditorState
+        isResizable: () => editorServiceWindow.mode === "normal"
     });
 
     container    = editorServiceWindow.container;
@@ -1712,39 +1731,27 @@ function centerEditor() {
 }
 
 /* ---- Geometry persistence ----
-   Generic geometry round-trip lives in service_window.js; the editor-specific
-   side-effects (entering maximized column layout, hiding the textarea when
-   minimized) stay here because they depend on tab content elements. */
+   ServiceWindow auto-persists geometry/mode/visibility to the localStorage
+   key derived from appName. These wrappers add the editor-specific
+   side-effects (entering maximized column layout, hiding tab content
+   elements when minimized) that the class can't know about. */
 
 function saveEditorState() {
     if (!editorServiceWindow) return;
-    service_window_persist_geometry(EDITOR_STATE_KEY, container, {
-        windowMode:     editorServiceWindow.mode,
-        previousBounds: editorServiceWindow.previousBounds
-    });
+    editorServiceWindow.persistState();
 }
 
 function restoreEditorState() {
 
-    const state = service_window_restore_geometry(EDITOR_STATE_KEY, container);
+    const state = editorServiceWindow.restoreState();
     if (!state) return false;
 
-    editorServiceWindow.mode           = state.windowMode    || "normal";
-    editorServiceWindow.previousBounds = state.previousBounds || null;
-
     if (editorServiceWindow.mode === "maximized") {
-        container.style.left = "0";
-        container.style.top = "0";
-        container.style.width = "100vw";
-        container.style.height = "100vh";
-        resizeHandle.style.display = "none";
         enterMaximizedColumnLayout();
     }
 
     if (editorServiceWindow.mode === "minimized") {
         textarea.style.display = "none";
-        container.style.height = "36px";
-        resizeHandle.style.display = "none";
     }
 
     return true;
@@ -1881,6 +1888,41 @@ function framework_scrollbars_inject() {
         }
     `;
     document.head.appendChild(style);
+}
+
+// ===== src/framework_system_restore.js =====
+// -----------------------------------------------------------------------------
+// framework_system_restore.js — system-restore bootstrap. Reads
+// localStorage["system_restore"] (populated by run_app.go from
+// appsettings.json "properties" or set manually) and, if equal to the string
+// "true", iterates the ServiceWindow app registry and re-launches every app
+// whose persisted state has visible:true.
+//
+// Each ServiceWindow instance auto-persists geometry/mode/visibility on
+// drag end, resize end, min/max/close, and show/hide — so the registry walk
+// here is the only thing required at boot time to bring back the previous
+// session's window layout.
+// -----------------------------------------------------------------------------
+
+function handle_system_restore() {
+    try {
+        if (localStorage.getItem("system_restore") !== "true") return;
+    } catch (e) {
+        return;
+    }
+
+    for (const { appName, launchFn } of ServiceWindow._apps) {
+        try {
+            const raw = localStorage.getItem("tm_window_" + appName);
+            if (!raw) continue;
+            const state = JSON.parse(raw);
+            if (state && state.visible) {
+                launchFn();
+            }
+        } catch (e) {
+            // Malformed state — skip this app.
+        }
+    }
 }
 
 // ===== src/service_dialog.js =====
@@ -2440,7 +2482,22 @@ const editorUndoRedoStack = new UndoRedoStack({
 
 class ServiceWindow {
 
+    /* ---- Static app registry ----
+       Each window registers itself by app name + a launcher function.
+       framework_system_restore.js iterates this list at boot time to
+       re-open windows that were visible on the last session. */
+    static _apps = [];
+
+    static registerApp(appName, launchFn) {
+        ServiceWindow._apps.push({ appName, launchFn });
+    }
+
+    static _stateKey(appName) {
+        return "tm_window_" + appName;
+    }
+
     constructor() {
+        this.appName         = null;
         this.container       = null;
         this.headerEl        = null;
         this.tabBarEl        = null;
@@ -2451,34 +2508,39 @@ class ServiceWindow {
         this.resizeHandle    = null;
         this.mode            = "normal";   // "normal" | "maximized" | "minimized"
         this.previousBounds  = null;
+        this.visible         = false;
         this.titleEl         = null;
         this._tabs           = [];   // [{ id, button }]
         this._activeTabId    = null;
     }
 
     /* Build container + header + min/max/close + drag wiring + resize handle.
-       Does NOT wire min/max/close onclick handlers — those stay with the
-       caller in Step B because they depend on editor-specific tab content
-       state. The caller writes to .minBtn.onclick / .maxBtn.onclick /
-       .closeBtn.onclick after .create() returns.
-
-       Caller appends its own header content (tab bar, action buttons, etc.)
-       directly into .headerEl. The min/max/close cluster is appended last so
-       it stays on the right edge under `justify-content: space-between`.
 
        opts:
+         appName             — REQUIRED. Used to form the localStorage key
+                               "tm_window_<appName>" for persisted geometry,
+                               mode, and visibility. Two windows must not
+                               share an appName.
          width, height       — initial size (defaults 500/350).
          title               — optional string. If provided, a title label is
                                appended to the tab bar slot (useful for minimal
                                apps that don't have real tabs).
          isDraggable()       — gate for drag start.
          isResizable()       — gate for resize start.
-         onDragEnd()         — called after drag mouseup.
-         onResizeEnd()       — called after resize mouseup.
+         onDragEnd()         — called after drag mouseup (in addition to
+                               automatic state persistence).
+         onResizeEnd()       — called after resize mouseup (in addition to
+                               automatic state persistence).
          minWidth, minHeight — resize floor (defaults 300/150). */
     create(opts) {
 
         opts = opts || {};
+
+        if (!opts.appName) {
+            throw new Error("ServiceWindow.create: opts.appName is required");
+        }
+        this.appName = opts.appName;
+
         const width  = opts.width  || 500;
         const height = opts.height || 350;
 
@@ -2550,16 +2612,18 @@ class ServiceWindow {
         });
         this.headerEl.appendChild(this.actionBarEl);
 
-        /* Drag */
+        /* Drag — wrap caller's onDragEnd with auto-persist. */
+        const userDragEnd = opts.onDragEnd || (() => {});
         service_window_make_draggable(this.container, this.headerEl, {
             isDraggable: opts.isDraggable,
-            onDragEnd:   opts.onDragEnd
+            onDragEnd:   () => { userDragEnd(); this.persistState(); }
         });
 
-        /* Resize handle */
+        /* Resize handle — wrap caller's onResizeEnd with auto-persist. */
+        const userResizeEnd = opts.onResizeEnd || (() => {});
         this.resizeHandle = service_window_create_resize_handle(this.container, {
             isResizable: opts.isResizable,
-            onResizeEnd: opts.onResizeEnd,
+            onResizeEnd: () => { userResizeEnd(); this.persistState(); },
             minWidth:    opts.minWidth,
             minHeight:   opts.minHeight
         });
@@ -2601,10 +2665,26 @@ class ServiceWindow {
         return this;
     }
 
+    /* ---- Show / hide (auto-persists visibility) ---- */
+
+    show() {
+        if (!this.container) return;
+        this.container.style.display = "flex";
+        this.visible = true;
+        this.persistState();
+    }
+
+    hide() {
+        if (!this.container) return;
+        this.container.style.display = "none";
+        this.visible = false;
+        this.persistState();
+    }
+
     /* ---- Default window-control behaviours ---- */
 
     defaultClose() {
-        if (this.container) this.container.style.display = "none";
+        this.hide();
     }
 
     defaultMaximize() {
@@ -2640,6 +2720,8 @@ class ServiceWindow {
             if (this.resizeHandle) this.resizeHandle.style.display = "block";
             this.mode = "normal";
         }
+
+        this.persistState();
     }
 
     defaultMinimize() {
@@ -2673,6 +2755,66 @@ class ServiceWindow {
             if (this.resizeHandle) this.resizeHandle.style.display = "block";
             this.mode = "normal";
         }
+
+        this.persistState();
+    }
+
+    /* ---- State persistence ----
+       Event-driven, not periodic. Called automatically after drag end,
+       resize end, min/max/close, and show/hide. Components that mutate
+       window geometry directly (e.g. component_window's column-layout
+       transitions) should call .persistState() at the end of their handler. */
+
+    persistState() {
+        if (!this.appName || !this.container) return;
+        const key = ServiceWindow._stateKey(this.appName);
+        const state = {
+            left:           this.container.style.left,
+            top:            this.container.style.top,
+            width:          this.container.style.width,
+            height:         this.container.style.height,
+            mode:           this.mode,
+            previousBounds: this.previousBounds,
+            visible:        this.visible
+        };
+        try { localStorage.setItem(key, JSON.stringify(state)); } catch (e) {}
+    }
+
+    /* Restore geometry + mode + previousBounds + visible flag from
+       localStorage. Returns the parsed state object (or null if none).
+       Does NOT call .show() — caller decides whether to re-open the window
+       based on state.visible (typically driven by framework_system_restore). */
+    restoreState() {
+        if (!this.appName || !this.container) return null;
+        const key = ServiceWindow._stateKey(this.appName);
+        let state;
+        try {
+            const raw = localStorage.getItem(key);
+            if (!raw) return null;
+            state = JSON.parse(raw);
+        } catch (e) { return null; }
+
+        if (state.left)   this.container.style.left   = state.left;
+        if (state.top)    this.container.style.top    = state.top;
+        if (state.width)  this.container.style.width  = state.width;
+        if (state.height) this.container.style.height = state.height;
+
+        this.mode           = state.mode || "normal";
+        this.previousBounds = state.previousBounds || null;
+        this.visible        = !!state.visible;
+
+        if (this.mode === "maximized") {
+            this.container.style.left   = "0";
+            this.container.style.top    = "0";
+            this.container.style.width  = "100vw";
+            this.container.style.height = "100vh";
+            if (this.resizeHandle) this.resizeHandle.style.display = "none";
+        } else if (this.mode === "minimized") {
+            this.container.style.height = "36px";
+            if (this.resizeHandle) this.resizeHandle.style.display = "none";
+        }
+
+        return state;
     }
 
     /* Caller invokes this after appending its own header content so the

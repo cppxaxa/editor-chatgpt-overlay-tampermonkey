@@ -11,19 +11,21 @@ let calcContainer     = null;
 
 function component_calc_launch() {
     if (!calcContainer) component_calc_create();
-    calcContainer.style.display = "flex";
+    calcServiceWindow.show();
 }
 
 function component_calc_create() {
 
     calcServiceWindow = new ServiceWindow();
     calcServiceWindow.create({
+        appName: "calc",
         width:  320,
         height: 200,
-        title:  "Calc",
         isDraggable: () => true,
         isResizable: () => true
     });
+
+    calcServiceWindow.registerTab({ id: "calc", label: "Calc" });
 
     /* Min/max/close cluster — defaults from ServiceWindow are fine for a
        minimal demo (close hides the container; max toggles fullscreen; min
@@ -56,6 +58,15 @@ function component_calc_create() {
     body.appendChild(sumBtn);
     body.appendChild(resultLabel);
 
-    /* Center on first show. */
-    service_window_center(calcContainer, 320, 200);
+    /* Restore previously saved geometry/mode; otherwise center. */
+    if (!calcServiceWindow.restoreState()) {
+        service_window_center(calcContainer, 320, 200);
+    }
+}
+
+/* Framework lifecycle reactor — registers calc with the system-restore
+   registry so framework_system_restore.js can re-open this window at boot
+   if it was visible in the last session. Called from framework_on_init(). */
+function component_calc_handle_init() {
+    ServiceWindow.registerApp("calc", component_calc_launch);
 }

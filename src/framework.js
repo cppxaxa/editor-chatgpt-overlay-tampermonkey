@@ -34,6 +34,8 @@ function framework_on_init() {
 
     component_waitingui_handle_init();
     component_linecommand_handle_init();
+    component_window_handle_init();
+    component_calc_handle_init();
 }
 
 function framework_init() {
@@ -44,4 +46,5 @@ function framework_init() {
     framework_on_init();
 
     handle_kiosk();
+    handle_system_restore();
 }

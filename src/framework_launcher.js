@@ -18,7 +18,7 @@ const FRAMEWORK_LAUNCHER_LEFT = 10;        // px from viewport left
 
 let _framework_launcher_count = 0;
 
-function framework_launcher_register(textContent, onlaunch) {
+function framework_launcher_register_simple(textContent, onlaunch) {
 
     const slotIndex = _framework_launcher_count;
     _framework_launcher_count++;
@@ -53,4 +53,12 @@ function framework_launcher_register(textContent, onlaunch) {
     };
 
     document.body.appendChild(btn);
+}
+
+/* Public API for components to register launcher buttons. Delegates to the
+   simple registration function for now, but we could add more complex options
+   here later if needed. */
+
+function framework_launcher_register(textContent, onlaunch) {
+    framework_launcher_register_simple(textContent, onlaunch);
 }
