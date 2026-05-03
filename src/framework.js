@@ -10,6 +10,7 @@
 function framework_register_launcher() {
 
     framework_launcher_register("E", component_window_launch);
+    framework_launcher_register("C", component_calc_launch);
 
     framework_on_launcher_registered();
 }

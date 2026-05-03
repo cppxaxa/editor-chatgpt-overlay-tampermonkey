@@ -21,6 +21,7 @@ class ServiceWindow {
         this.resizeHandle    = null;
         this.mode            = "normal";   // "normal" | "maximized" | "minimized"
         this.previousBounds  = null;
+        this.titleEl         = null;
         this._tabs           = [];   // [{ id, button }]
         this._activeTabId    = null;
     }
@@ -37,6 +38,9 @@ class ServiceWindow {
 
        opts:
          width, height       — initial size (defaults 500/350).
+         title               — optional string. If provided, a title label is
+                               appended to the tab bar slot (useful for minimal
+                               apps that don't have real tabs).
          isDraggable()       — gate for drag start.
          isResizable()       — gate for resize start.
          onDragEnd()         — called after drag mouseup.
@@ -91,6 +95,20 @@ class ServiceWindow {
         });
         this.headerEl.appendChild(this.tabBarEl);
 
+        /* Optional title label — appended to the tab bar slot. Convenient for
+           minimal apps that don't register any real tabs. */
+        if (opts.title) {
+            const titleEl = document.createElement("div");
+            titleEl.textContent = opts.title;
+            Object.assign(titleEl.style, {
+                color: "white",
+                fontSize: "12px",
+                padding: "4px 10px"
+            });
+            this.tabBarEl.appendChild(titleEl);
+            this.titleEl = titleEl;
+        }
+
         /* Action bar (sits next to tab bar) — registerAction() appends here. */
         this.actionBarEl = document.createElement("div");
         this.actionBarEl.className = "tm-action-btns";
@@ -139,13 +157,190 @@ class ServiceWindow {
             controls.appendChild(btn);
         });
 
+        /* Default min/max/close behaviour. Minimal apps (e.g. component_calc)
+           get sensible defaults out-of-the-box and don't need to wire anything.
+           Apps with extra concerns (e.g. component_window's tab content
+           visibility + column layout) can either:
+             - replace the onclick entirely (legacy pattern), or
+             - call this.defaultMinimize() / .defaultMaximize() / .defaultClose()
+               from their own handler and add extras around it. */
+        this.minBtn.onclick   = () => this.defaultMinimize();
+        this.maxBtn.onclick   = () => this.defaultMaximize();
+        this.closeBtn.onclick = () => this.defaultClose();
+
         return this;
+    }
+
+    /* ---- Default window-control behaviours ---- */
+
+    defaultClose() {
+        if (this.container) this.container.style.display = "none";
+    }
+
+    defaultMaximize() {
+
+        if (!this.container) return;
+
+        if (this.mode !== "maximized") {
+
+            this.previousBounds = {
+                left:   this.container.style.left,
+                top:    this.container.style.top,
+                width:  this.container.style.width,
+                height: this.container.style.height
+            };
+
+            this.container.style.left   = "0";
+            this.container.style.top    = "0";
+            this.container.style.width  = "100vw";
+            this.container.style.height = "100vh";
+
+            if (this.resizeHandle) this.resizeHandle.style.display = "none";
+            this.mode = "maximized";
+        }
+        else {
+
+            if (this.previousBounds) {
+                this.container.style.left   = this.previousBounds.left;
+                this.container.style.top    = this.previousBounds.top;
+                this.container.style.width  = this.previousBounds.width;
+                this.container.style.height = this.previousBounds.height;
+            }
+
+            if (this.resizeHandle) this.resizeHandle.style.display = "block";
+            this.mode = "normal";
+        }
+    }
+
+    defaultMinimize() {
+
+        if (!this.container) return;
+
+        if (this.mode !== "minimized") {
+
+            this.previousBounds = {
+                left:   this.container.style.left,
+                top:    this.container.style.top,
+                width:  this.container.style.width,
+                height: this.container.style.height
+            };
+
+            this.container.style.height = "36px";
+            if (this.resizeHandle) this.resizeHandle.style.display = "none";
+            this.mode = "minimized";
+        }
+        else {
+
+            if (this.previousBounds) {
+                this.container.style.left   = this.previousBounds.left;
+                this.container.style.top    = this.previousBounds.top;
+                this.container.style.width  = this.previousBounds.width;
+                this.container.style.height = this.previousBounds.height;
+            } else {
+                this.container.style.height = "350px";
+            }
+
+            if (this.resizeHandle) this.resizeHandle.style.display = "block";
+            this.mode = "normal";
+        }
     }
 
     /* Caller invokes this after appending its own header content so the
        min/max/close cluster ends up at the right edge of the header. */
     appendControls() {
         this.headerEl.appendChild(this._controlsEl);
+    }
+
+    /* Create a body <div> below the header, append it to the container,
+       and return it. Convenient for minimal apps so they don't have to
+       hand-roll a flex-column wrapper.
+
+       opts (all optional):
+         padding   — default "12px"
+         gap       — default "8px"
+         color     — default "white"
+         fontSize  — default "13px"
+         direction — "column" (default) | "row"
+         style     — additional Object.assign overrides applied last */
+    createBody(opts) {
+
+        opts = opts || {};
+        const body = document.createElement("div");
+
+        Object.assign(body.style, {
+            flex: "1",
+            display: "flex",
+            flexDirection: opts.direction || "column",
+            gap:       opts.gap      || "8px",
+            padding:   opts.padding  || "12px",
+            color:     opts.color    || "white",
+            fontSize:  opts.fontSize || "13px",
+            overflow: "auto"
+        });
+
+        if (opts.style) Object.assign(body.style, opts.style);
+
+        this.container.appendChild(body);
+        this.bodyEl = body;
+        return body;
+    }
+
+    /* Create a styled label <div>. Caller updates .textContent later to
+       reflect dynamic state. */
+    createLabel(text) {
+
+        const el = document.createElement("div");
+        el.textContent = text || "";
+
+        Object.assign(el.style, {
+            marginTop: "4px",
+            color: "#ddd",
+            fontSize: "13px"
+        });
+
+        return el;
+    }
+
+    /* Create a styled <input type="text"> textbox. Caller sets .type /
+       .value / .onchange / extra attributes after construction. */
+    createTextbox(placeholder) {
+
+        const input = document.createElement("input");
+        input.type = "text";
+        if (placeholder) input.placeholder = placeholder;
+
+        Object.assign(input.style, {
+            background: "#2a2a2a",
+            color: "white",
+            border: "1px solid #444",
+            borderRadius: "4px",
+            padding: "4px 6px",
+            fontSize: "13px",
+            width: "100%",
+            boxSizing: "border-box"
+        });
+
+        return input;
+    }
+
+    /* Create a primary action button (filled, accent-coloured). Caller wires
+       .onclick / .title / extra styles after construction. */
+    createPrimaryButton(label) {
+
+        const btn = document.createElement("button");
+        btn.textContent = label || "OK";
+
+        Object.assign(btn.style, {
+            background: "#4fc3f7",
+            color: "#000",
+            border: "none",
+            borderRadius: "4px",
+            padding: "6px 10px",
+            cursor: "pointer",
+            fontWeight: "bold"
+        });
+
+        return btn;
     }
 
     /* Register a tab. Adds a styled button to .tabBarEl that, when clicked,

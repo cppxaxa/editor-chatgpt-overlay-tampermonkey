@@ -312,12 +312,30 @@ function createEditor() {
     const restored = restoreEditorState();
     if (!restored) centerEditor();
 
-    /* Window control button handlers */
+    /* Window control button handlers — wrap ServiceWindow's defaults with
+       editor-specific extras (tab content visibility, column layout). The
+       defaults handle geometry / mode / previousBounds / resizeHandle. */
 
     minBtn.onclick = () => {
 
-        if (editorServiceWindow.mode === "minimized") {
+        const wasMinimized = editorServiceWindow.mode === "minimized";
 
+        if (!wasMinimized && editorServiceWindow.mode === "maximized" && activeTab === "editor") {
+            exitMaximizedColumnLayout();
+        }
+
+        editorServiceWindow.defaultMinimize();
+
+        if (editorServiceWindow.mode === "minimized") {
+            textarea.style.display      = "none";
+            columnContainer.style.display = "none";
+            asciiTA.style.display       = "none";
+            questionTA.style.display    = "none";
+            snippetsTA.style.display    = "none";
+            spreviewFrame.style.display = "none";
+        }
+        else {
+            /* Restoring from minimized — show the active tab's content. */
             if (activeTab === "ascii") {
                 asciiTA.style.display = "block"; asciiTA.focus();
             } else if (activeTab === "question") {
@@ -329,40 +347,6 @@ function createEditor() {
             } else {
                 textarea.style.display = "block";
             }
-            if (editorServiceWindow.previousBounds) {
-                container.style.left   = editorServiceWindow.previousBounds.left;
-                container.style.top    = editorServiceWindow.previousBounds.top;
-                container.style.width  = editorServiceWindow.previousBounds.width;
-                container.style.height = editorServiceWindow.previousBounds.height;
-            } else {
-                container.style.height = "350px";
-            }
-            resizeHandle.style.display = "block";
-            editorServiceWindow.mode = "normal";
-        }
-        else {
-
-            if (editorServiceWindow.mode === "maximized" && activeTab === "editor") {
-                exitMaximizedColumnLayout();
-            }
-
-            editorServiceWindow.previousBounds = {
-                left: container.style.left,
-                top: container.style.top,
-                width: container.style.width,
-                height: container.style.height
-            };
-
-            textarea.style.display = "none";
-            columnContainer.style.display = "none";
-            asciiTA.style.display = "none";
-            questionTA.style.display = "none";
-            snippetsTA.style.display = "none";
-            spreviewFrame.style.display = "none";
-            resizeHandle.style.display = "none";
-            container.style.height = "36px";
-
-            editorServiceWindow.mode = "minimized";
         }
 
         saveEditorState();
@@ -370,44 +354,22 @@ function createEditor() {
 
     maxBtn.onclick = () => {
 
-        if (editorServiceWindow.mode !== "maximized") {
+        const wasMaximized = editorServiceWindow.mode === "maximized";
 
-            editorServiceWindow.previousBounds = {
-                left: container.style.left,
-                top: container.style.top,
-                width: container.style.width,
-                height: container.style.height
-            };
-
-            container.style.left = "0";
-            container.style.top = "0";
-            container.style.width = "100vw";
-            container.style.height = "100vh";
-
-            resizeHandle.style.display = "none";
-
-            editorServiceWindow.mode = "maximized";
-            if (activeTab === "editor") enterMaximizedColumnLayout();
+        if (wasMaximized && activeTab === "editor") {
+            exitMaximizedColumnLayout();
         }
-        else {
 
-            if (activeTab === "editor") exitMaximizedColumnLayout();
+        editorServiceWindow.defaultMaximize();
 
-            if (editorServiceWindow.previousBounds) {
-                container.style.left   = editorServiceWindow.previousBounds.left;
-                container.style.top    = editorServiceWindow.previousBounds.top;
-                container.style.width  = editorServiceWindow.previousBounds.width;
-                container.style.height = editorServiceWindow.previousBounds.height;
-            }
-
-            resizeHandle.style.display = "block";
-            editorServiceWindow.mode = "normal";
+        if (!wasMaximized && editorServiceWindow.mode === "maximized" && activeTab === "editor") {
+            enterMaximizedColumnLayout();
         }
 
         saveEditorState();
     };
 
-    closeBtn.onclick = () => container.style.display = "none";
+    /* closeBtn keeps ServiceWindow's default behaviour (hide container). */
 }
 
 /* ---- Initial centering ---- */
