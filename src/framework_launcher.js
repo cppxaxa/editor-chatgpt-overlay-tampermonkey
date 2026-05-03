@@ -64,7 +64,14 @@ function framework_launcher_register_simple(textContent, onlaunch, opts) {
 
     btn.onclick = () => {
         if (typeof onlaunch === "function") {
-            try { onlaunch(); }
+            try {
+                /* Record this button's rect as the one-shot launch anchor so
+                   the next ServiceWindow.show() animates from here. */
+                if (typeof ServiceWindow !== "undefined" && ServiceWindow.setLaunchAnchor) {
+                    ServiceWindow.setLaunchAnchor(btn.getBoundingClientRect());
+                }
+                onlaunch();
+            }
             catch (e) { console.error("framework_launcher onlaunch threw:", e); }
         }
     };

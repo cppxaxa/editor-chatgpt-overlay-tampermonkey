@@ -342,8 +342,8 @@ class ServiceWindow {
            _toggleFromTray, which paints the tail; if the user calls show()
            directly (e.g. system_restore), we still re-snap to the tray. */
         const origHide = this.hide.bind(this);
-        this.hide = () => {
-            origHide();
+        this.hide = (opts) => {
+            origHide(opts);
             if (this._trayTailEl) this._trayTailEl.style.display = "none";
         };
     }
@@ -357,11 +357,27 @@ class ServiceWindow {
             return;
         }
 
-        /* Show first so offsetWidth/Height are valid for the snap math. */
-        this.show();
+        /* Show first so offsetWidth/Height are valid for the snap math.
+           skipAnim defers the open animation until after we've snapped to
+           the tray — otherwise the transform-origin is computed against
+           the pre-snap container position and the window appears to grow
+           from the wrong spot. */
+        this.show({ skipAnim: true });
 
-        if (this.mode === "maximized") return;   // maximized fills viewport; no snap
-        if (this.mode === "minimized") return;   // header-only strip; no snap
+        if (this.mode === "maximized") {
+            /* Tray-mode window opened maximized — animate from the tray
+               icon anyway so the open is consistent. */
+            const ar = btn && btn.getBoundingClientRect ? btn.getBoundingClientRect() : null;
+            this._lastAnchor = ar;
+            this._playOpenAnim(ar);
+            return;
+        }
+        if (this.mode === "minimized") {
+            const ar = btn && btn.getBoundingClientRect ? btn.getBoundingClientRect() : null;
+            this._lastAnchor = ar;
+            this._playOpenAnim(ar);
+            return;
+        }
 
         /* If no tray button is currently attached (icon hidden via registry),
            skip the snap+tail and just leave the window where the user last
@@ -369,6 +385,8 @@ class ServiceWindow {
         if (!btn) {
             if (this._trayTailEl) this._trayTailEl.style.display = "none";
             this.persistState();
+            this._lastAnchor = null;
+            this._playOpenAnim(null);
             return;
         }
 
@@ -435,6 +453,13 @@ class ServiceWindow {
         }
 
         this.persistState();
+
+        /* Run the open animation now that the window has been snapped above
+           the tray icon. Anchor is the tray button so the window appears to
+           grow out of it. */
+        const anchor = btn.getBoundingClientRect ? btn.getBoundingClientRect() : null;
+        this._lastAnchor = anchor;
+        this._playOpenAnim(anchor);
 
         /* Auto-focus the first text input inside the window so the user can
            start typing immediately after a tray click / Ctrl+1..9 launch.
@@ -520,10 +545,109 @@ class ServiceWindow {
         }
     }
 
+    /* ---- Open/close animations ----
+       Scale-from-anchor + fade. Fast (120ms open, 100ms close) so frequent
+       launcher / Ctrl+1..9 use never feels sluggish. Honours
+       `prefers-reduced-motion` by skipping the transform entirely.
+
+       Implementation note: we apply the transform inline on .container,
+       but the container has its own transform-origin reset back to
+       "center center" when the animation finishes — drag/resize math reads
+       offsetLeft/offsetTop which are unaffected by transform, but a
+       lingering transform-origin would still show on debug inspections.
+       Cleared transform also lets ServiceWindow._adoptTrayButton's
+       absolute positioning math stay simple. */
+
+    static _ANIM_OPEN_MS  = 120;
+    static _ANIM_CLOSE_MS = 100;
+    static _launchAnchor  = null;   // one-shot anchor rect set by launcher wrappers
+
+    static setLaunchAnchor(rect) {
+        ServiceWindow._launchAnchor = rect || null;
+    }
+
+    static _reducedMotion() {
+        try {
+            return window.matchMedia &&
+                window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        } catch (e) { return false; }
+    }
+
+    /* Compute transform-origin string ("Xpx Ypx") in the container's local
+       coordinate system, given a viewport-relative anchor rect. Falls back
+       to "center center" when no anchor is supplied. */
+    _originForAnchor(anchorRect) {
+        if (!anchorRect || !this.container) return "center center";
+        const cr = this.container.getBoundingClientRect();
+        if (cr.width === 0 || cr.height === 0) return "center center";
+        const ax = anchorRect.left + (anchorRect.width  || 0) / 2;
+        const ay = anchorRect.top  + (anchorRect.height || 0) / 2;
+        const ox = Math.max(-cr.width,  Math.min(cr.width  * 2, ax - cr.left));
+        const oy = Math.max(-cr.height, Math.min(cr.height * 2, ay - cr.top));
+        return ox + "px " + oy + "px";
+    }
+
+    _playOpenAnim(anchorRect) {
+        if (!this.container) return;
+        if (ServiceWindow._reducedMotion()) return;
+
+        /* Cancel any in-flight close animation first. */
+        if (this._animTimer) { clearTimeout(this._animTimer); this._animTimer = null; }
+
+        const c = this.container;
+        const dur = ServiceWindow._ANIM_OPEN_MS;
+        c.style.transformOrigin = this._originForAnchor(anchorRect);
+        c.style.transition      = "none";
+        c.style.transform       = "scale(0.85)";
+        c.style.opacity         = "0";
+        /* Force layout flush so the starting state is committed before we
+           switch to the transitioned end state. */
+        // eslint-disable-next-line no-unused-expressions
+        c.offsetWidth;
+        c.style.transition = "transform " + dur + "ms cubic-bezier(.2,.8,.2,1), opacity " + dur + "ms ease-out";
+        c.style.transform  = "scale(1)";
+        c.style.opacity    = "1";
+
+        this._animTimer = setTimeout(() => {
+            this._animTimer = null;
+            if (!this.container) return;
+            this.container.style.transition      = "";
+            this.container.style.transform       = "";
+            this.container.style.transformOrigin = "";
+            this.container.style.opacity         = "";
+        }, dur + 20);
+    }
+
+    _playCloseAnim(anchorRect, done) {
+        if (!this.container) { if (done) done(); return; }
+        if (ServiceWindow._reducedMotion()) { if (done) done(); return; }
+
+        if (this._animTimer) { clearTimeout(this._animTimer); this._animTimer = null; }
+
+        const c = this.container;
+        const dur = ServiceWindow._ANIM_CLOSE_MS;
+        c.style.transformOrigin = this._originForAnchor(anchorRect);
+        c.style.transition      = "transform " + dur + "ms ease-in, opacity " + dur + "ms ease-in";
+        c.style.transform       = "scale(0.9)";
+        c.style.opacity         = "0";
+
+        this._animTimer = setTimeout(() => {
+            this._animTimer = null;
+            if (this.container) {
+                this.container.style.transition      = "";
+                this.container.style.transform       = "";
+                this.container.style.transformOrigin = "";
+                this.container.style.opacity         = "";
+            }
+            if (done) done();
+        }, dur + 10);
+    }
+
     /* ---- Show / hide (auto-persists visibility) ---- */
 
-    show() {
+    show(opts) {
         if (!this.container) return;
+        const wasVisible = this.visible;
         this.container.style.display = "flex";
         this.visible = true;
         this._markActive();
@@ -535,6 +659,24 @@ class ServiceWindow {
             this._ensureOnScreen();
         }
         this.persistState();
+
+        /* Open animation. Anchor priority:
+             1. opts.anchor (caller-supplied rect)
+             2. ServiceWindow._launchAnchor (one-shot, set by launchers)
+             3. this._trayBtn rect (tray apps default to their tray icon)
+             4. null (centered scale).
+           Skipped if the window was already visible (e.g. show() called
+           twice during a maximize transition), or if opts.skipAnim is
+           true (tray flow defers the animation until after the snap). */
+        if (!wasVisible && !(opts && opts.skipAnim)) {
+            let anchor = (opts && opts.anchor) || ServiceWindow._launchAnchor || null;
+            ServiceWindow._launchAnchor = null;
+            if (!anchor && this._trayBtn && this._trayBtn.getBoundingClientRect) {
+                anchor = this._trayBtn.getBoundingClientRect();
+            }
+            this._lastAnchor = anchor;
+            this._playOpenAnim(anchor);
+        }
     }
 
     /* Recenter the window if its current bounds aren't fully inside the
@@ -562,10 +704,27 @@ class ServiceWindow {
         }
     }
 
-    hide() {
+    hide(opts) {
         if (!this.container) return;
-        this.container.style.display = "none";
+        const wasVisible = this.visible;
         this.visible = false;
+
+        /* Close animation. Same anchor resolution as show(). */
+        let anchor = (opts && opts.anchor) || this._lastAnchor || null;
+        if (!anchor && this._trayBtn && this._trayBtn.getBoundingClientRect) {
+            anchor = this._trayBtn.getBoundingClientRect();
+        }
+        if (wasVisible) {
+            this._playCloseAnim(anchor, () => {
+                /* Only actually hide if nobody re-showed the window during
+                   the brief animation. */
+                if (!this.visible && this.container) {
+                    this.container.style.display = "none";
+                }
+            });
+        } else {
+            this.container.style.display = "none";
+        }
         /* Promote the most-recently-interacted-with visible peer to active.
            Picking by max _lastActiveAt matches OS focus-fallback semantics:
            when you close the front window, the previously front-most one

@@ -7,6 +7,23 @@
 let chatServiceWindow = null;
 let chatContainer      = null;
 
+/* Inline SVG chat bubble: 14x14 viewBox, currentColor strokes so it inherits
+   whatever container's text colour (tray button, taskbar running-app
+   button, hover state). A rounded speech bubble with a small triangular
+   tail at the bottom-left, plus three dots indicating conversation. */
+const CHAT_ICON_SVG =
+    "<svg width='14' height='14' viewBox='0 0 14 14' " +
+    "xmlns='http://www.w3.org/2000/svg' style='display:block'>" +
+        "<path d='M2 1.5 h10 a1.5 1.5 0 0 1 1.5 1.5 v6 " +
+        "a1.5 1.5 0 0 1 -1.5 1.5 h-6.5 l-2.5 2.5 v-2.5 " +
+        "h-1 a1.5 1.5 0 0 1 -1.5 -1.5 v-6 " +
+        "a1.5 1.5 0 0 1 1.5 -1.5 z' " +
+        "fill='none' stroke='currentColor' stroke-width='1'/>" +
+        "<circle cx='4.5' cy='5.8' r='0.7' fill='currentColor'/>" +
+        "<circle cx='7'   cy='5.8' r='0.7' fill='currentColor'/>" +
+        "<circle cx='9.5' cy='5.8' r='0.7' fill='currentColor'/>" +
+    "</svg>";
+
 // DOM refs
 let _chat_log       = null;   // scrollable message history
 let _chat_input     = null;   // prompt textarea
@@ -250,7 +267,7 @@ function component_chat_handle_init() {
         service_taskbar_register_tray_app({
             appName: "chat",
             label:   "Chat",
-            icon:    "💬",
+            icon:    CHAT_ICON_SVG,
             title:   "Chat",
             onClick: (btn) => {
                 if (!chatContainer) component_chat_create();

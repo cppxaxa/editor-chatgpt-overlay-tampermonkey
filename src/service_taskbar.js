@@ -685,7 +685,14 @@ function _service_taskbar_rebuild_start_list(filter) {
         entry.onmouseout  = () => { entry.style.background = "transparent"; };
         entry.onclick = () => {
             _service_taskbar_close_start_menu();
-            try { app.onlaunch(); }
+            try {
+                /* Use this menu entry's rect as the launch anchor — windows
+                   will animate-grow from the clicked Start menu row. */
+                if (typeof ServiceWindow !== "undefined" && ServiceWindow.setLaunchAnchor) {
+                    ServiceWindow.setLaunchAnchor(entry.getBoundingClientRect());
+                }
+                app.onlaunch();
+            }
             catch (err) { console.error("taskbar launch threw:", err); }
         };
         _taskbar_start_list.appendChild(entry);
@@ -785,13 +792,13 @@ function _service_taskbar_patch_service_window() {
     const origMin  = ServiceWindow.prototype.defaultMinimize;
     const origMax  = ServiceWindow.prototype.defaultMaximize;
 
-    ServiceWindow.prototype.show = function () {
-        origShow.call(this);
+    ServiceWindow.prototype.show = function (opts) {
+        origShow.call(this, opts);
         _service_taskbar_on_show(this);
     };
 
-    ServiceWindow.prototype.hide = function () {
-        origHide.call(this);
+    ServiceWindow.prototype.hide = function (opts) {
+        origHide.call(this, opts);
         _service_taskbar_on_hide(this);
     };
 
@@ -920,6 +927,9 @@ function _service_taskbar_on_show(sw) {
     btn.appendChild(labelEl);
 
     btn.onclick = () => {
+        if (typeof ServiceWindow !== "undefined" && ServiceWindow.setLaunchAnchor) {
+            ServiceWindow.setLaunchAnchor(btn.getBoundingClientRect());
+        }
         if (!sw.visible) {
             sw.show();
             return;
