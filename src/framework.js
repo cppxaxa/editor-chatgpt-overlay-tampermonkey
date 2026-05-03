@@ -11,6 +11,7 @@ function framework_register_launcher() {
 
     framework_launcher_register("E", component_window_launch);
     framework_launcher_register("C", component_calc_launch);
+    framework_launcher_register("L", component_localstorage_launch);
 
     framework_on_launcher_registered();
 }
@@ -36,6 +37,7 @@ function framework_on_init() {
     component_linecommand_handle_init();
     component_window_handle_init();
     component_calc_handle_init();
+    component_localstorage_handle_init();
 }
 
 function framework_init() {

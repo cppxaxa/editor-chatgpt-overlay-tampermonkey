@@ -36,6 +36,7 @@ function framework_register_launcher() {
 
     framework_launcher_register("E", component_window_launch);
     framework_launcher_register("C", component_calc_launch);
+    framework_launcher_register("L", component_localstorage_launch);
 
     framework_on_launcher_registered();
 }
@@ -61,6 +62,7 @@ function framework_on_init() {
     component_linecommand_handle_init();
     component_window_handle_init();
     component_calc_handle_init();
+    component_localstorage_handle_init();
 }
 
 function framework_init() {
@@ -772,6 +774,390 @@ function registerLineReaderHotkey() {
 
         if (e.altKey && e.key.toLowerCase() === "r") { e.preventDefault(); regenerateCurrentTab(); }
     });
+}
+
+// ===== src/component_localstorage.js =====
+// component_localstorage.js — localStorage viewer app. Shows all localStorage
+// entries in a two-column key/value table. JSON values are expandable into a
+// nested grid. Search filters across both keys and values.
+//
+// Registered with the framework launcher as "L". Lazily creates the window on
+// first launch.
+
+let lsServiceWindow = null;
+let lsContainer     = null;
+let lsBody          = null;
+let lsSearchInput   = null;
+let lsTableWrap     = null;
+
+function component_localstorage_launch() {
+    if (!lsContainer) component_localstorage_create();
+    lsServiceWindow.show();
+    component_localstorage_refresh();
+}
+
+function component_localstorage_create() {
+
+    lsServiceWindow = new ServiceWindow();
+    lsServiceWindow.create({
+        appName: "localstorage",
+        width:  700,
+        height: 500,
+        isDraggable: () => true,
+        isResizable: () => true,
+        minWidth: 400,
+        minHeight: 250
+    });
+
+    lsServiceWindow.registerTab({ id: "ls", label: "LocalStorage" });
+
+    lsServiceWindow.registerAction({
+        label: "↻",
+        title: "Refresh",
+        onClick: component_localstorage_refresh
+    });
+
+    lsServiceWindow.appendControls();
+
+    lsContainer = lsServiceWindow.container;
+
+    /* Body */
+    lsBody = lsServiceWindow.createBody({ padding: "8px", gap: "6px" });
+
+    /* Search bar */
+    lsSearchInput = lsServiceWindow.createTextbox("Search keys and values…");
+    lsSearchInput.addEventListener("input", component_localstorage_refresh);
+    lsBody.appendChild(lsSearchInput);
+
+    /* Table wrapper */
+    lsTableWrap = document.createElement("div");
+    Object.assign(lsTableWrap.style, {
+        flex: "1",
+        overflow: "auto",
+        border: "1px solid #333",
+        borderRadius: "4px"
+    });
+    lsBody.appendChild(lsTableWrap);
+
+    /* Restore previously saved geometry/mode; otherwise center. */
+    if (!lsServiceWindow.restoreState()) {
+        service_window_center(lsContainer, 700, 500);
+    }
+}
+
+/* ---- Refresh / render ---- */
+
+function component_localstorage_refresh() {
+    if (!lsTableWrap) return;
+
+    const filter = (lsSearchInput ? lsSearchInput.value : "").toLowerCase();
+
+    /* Gather entries */
+    const entries = [];
+    for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        const val = localStorage.getItem(key);
+        if (filter) {
+            if (key.toLowerCase().indexOf(filter) === -1 &&
+                val.toLowerCase().indexOf(filter) === -1) continue;
+        }
+        entries.push({ key, val });
+    }
+    entries.sort((a, b) => a.key.localeCompare(b.key));
+
+    /* Clear */
+    lsTableWrap.innerHTML = "";
+
+    /* Build table */
+    const table = document.createElement("table");
+    Object.assign(table.style, {
+        width: "100%",
+        borderCollapse: "collapse",
+        fontSize: "12px",
+        fontFamily: "Consolas, monospace",
+        tableLayout: "fixed"
+    });
+
+    /* Header row */
+    const thead = document.createElement("thead");
+    const hrow = document.createElement("tr");
+    const thKey = document.createElement("th");
+    thKey.textContent = "Key";
+    const thVal = document.createElement("th");
+    thVal.textContent = "Value";
+    [thKey, thVal].forEach((th, i) => {
+        Object.assign(th.style, {
+            textAlign: "left",
+            padding: "6px 8px",
+            borderBottom: "1px solid #444",
+            background: "#2a2a2a",
+            color: "#aaa",
+            position: "sticky",
+            top: "0",
+            zIndex: "1",
+            width: i === 0 ? "30%" : "70%"
+        });
+    });
+    hrow.appendChild(thKey);
+    hrow.appendChild(thVal);
+    thead.appendChild(hrow);
+    table.appendChild(thead);
+
+    /* Body rows */
+    const tbody = document.createElement("tbody");
+    for (const entry of entries) {
+        const tr = document.createElement("tr");
+
+        /* Key cell */
+        const tdKey = document.createElement("td");
+        tdKey.textContent = entry.key;
+        Object.assign(tdKey.style, {
+            padding: "4px 8px",
+            borderBottom: "1px solid #2a2a2a",
+            color: "#6fc",
+            verticalAlign: "top",
+            wordBreak: "break-all",
+            width: "30%"
+        });
+
+        /* Value cell */
+        const tdVal = document.createElement("td");
+        Object.assign(tdVal.style, {
+            padding: "4px 8px",
+            borderBottom: "1px solid #2a2a2a",
+            color: "#ddd",
+            verticalAlign: "top",
+            width: "70%"
+        });
+
+        const parsed = _ls_try_parse_json(entry.val);
+        if (parsed !== null && typeof parsed === "object") {
+            tdVal.appendChild(_ls_render_json_toggle(parsed, entry.val));
+        } else {
+            tdVal.appendChild(_ls_render_primitive(entry.val));
+        }
+
+        tr.appendChild(tdKey);
+        tr.appendChild(tdVal);
+
+        /* Hover */
+        tr.addEventListener("mouseenter", () => { tr.style.background = "#2a2a2a"; });
+        tr.addEventListener("mouseleave", () => { tr.style.background = ""; });
+
+        tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+
+    /* Empty state */
+    if (entries.length === 0) {
+        const empty = document.createElement("div");
+        empty.textContent = filter ? "No matches." : "localStorage is empty.";
+        Object.assign(empty.style, { color: "#666", padding: "20px", textAlign: "center" });
+        lsTableWrap.appendChild(empty);
+    } else {
+        lsTableWrap.appendChild(table);
+    }
+}
+
+/* ---- JSON helpers ---- */
+
+function _ls_try_parse_json(str) {
+    if (!str || str.length < 2) return null;
+    const c = str[0];
+    if (c !== "{" && c !== "[" && c !== "\"") return null;
+    try { return JSON.parse(str); } catch (e) { return null; }
+}
+
+/* Render a primitive value as a colored span */
+function _ls_render_primitive(val) {
+    const span = document.createElement("span");
+    span.style.wordBreak = "break-all";
+
+    if (val === "true" || val === "false") {
+        span.textContent = val;
+        span.style.color = "#f9a825";
+    } else if (val !== "" && !isNaN(val)) {
+        span.textContent = val;
+        span.style.color = "#ce93d8";
+    } else {
+        span.textContent = val;
+        span.style.color = "#ddd";
+    }
+    return span;
+}
+
+/* Render a JSON value with a toggle: collapsed (raw string) or expanded (grid) */
+function _ls_render_json_toggle(parsed, rawStr) {
+    const wrap = document.createElement("div");
+
+    const toggle = document.createElement("span");
+    toggle.textContent = "▶ JSON";
+    Object.assign(toggle.style, {
+        color: "#4fc3f7",
+        cursor: "pointer",
+        fontSize: "11px",
+        marginRight: "6px",
+        userSelect: "none"
+    });
+
+    const preview = document.createElement("span");
+    const previewText = rawStr.length > 80 ? rawStr.substring(0, 80) + "…" : rawStr;
+    preview.textContent = previewText;
+    Object.assign(preview.style, {
+        color: "#888",
+        fontSize: "11px",
+        wordBreak: "break-all"
+    });
+
+    const detail = document.createElement("div");
+    detail.style.display = "none";
+    Object.assign(detail.style, {
+        marginTop: "4px",
+        maxHeight: "300px",
+        overflow: "auto"
+    });
+
+    let expanded = false;
+    let built = false;
+
+    toggle.addEventListener("click", () => {
+        expanded = !expanded;
+        if (expanded) {
+            toggle.textContent = "▼ JSON";
+            preview.style.display = "none";
+            detail.style.display = "block";
+            if (!built) {
+                detail.appendChild(_ls_render_json_value(parsed, 0));
+                built = true;
+            }
+        } else {
+            toggle.textContent = "▶ JSON";
+            preview.style.display = "";
+            detail.style.display = "none";
+        }
+    });
+
+    wrap.appendChild(toggle);
+    wrap.appendChild(preview);
+    wrap.appendChild(detail);
+    return wrap;
+}
+
+/* Recursively render a JSON value as a nested grid */
+function _ls_render_json_value(val, depth) {
+
+    if (val === null) {
+        const s = document.createElement("span");
+        s.textContent = "null";
+        s.style.color = "#f44336";
+        return s;
+    }
+
+    if (typeof val === "boolean") {
+        const s = document.createElement("span");
+        s.textContent = String(val);
+        s.style.color = "#f9a825";
+        return s;
+    }
+
+    if (typeof val === "number") {
+        const s = document.createElement("span");
+        s.textContent = String(val);
+        s.style.color = "#ce93d8";
+        return s;
+    }
+
+    if (typeof val === "string") {
+        const s = document.createElement("span");
+        s.textContent = "\"" + val + "\"";
+        s.style.color = "#a5d6a7";
+        s.style.wordBreak = "break-all";
+        return s;
+    }
+
+    if (Array.isArray(val)) {
+        if (val.length === 0) {
+            const s = document.createElement("span");
+            s.textContent = "[]";
+            s.style.color = "#888";
+            return s;
+        }
+        return _ls_render_json_table(val, depth, true);
+    }
+
+    if (typeof val === "object") {
+        const keys = Object.keys(val);
+        if (keys.length === 0) {
+            const s = document.createElement("span");
+            s.textContent = "{}";
+            s.style.color = "#888";
+            return s;
+        }
+        return _ls_render_json_table(val, depth, false);
+    }
+
+    const s = document.createElement("span");
+    s.textContent = String(val);
+    return s;
+}
+
+/* Render an object or array as a key/value grid */
+function _ls_render_json_table(obj, depth, isArray) {
+    const tbl = document.createElement("table");
+    Object.assign(tbl.style, {
+        borderCollapse: "collapse",
+        fontSize: "11px",
+        fontFamily: "Consolas, monospace",
+        width: "100%",
+        marginLeft: depth > 0 ? "0" : "0"
+    });
+
+    const borderColor = depth % 2 === 0 ? "#333" : "#3a3a3a";
+
+    const entries = isArray
+        ? obj.map((v, i) => [i, v])
+        : Object.entries(obj);
+
+    for (const [k, v] of entries) {
+        const tr = document.createElement("tr");
+
+        const tdK = document.createElement("td");
+        tdK.textContent = isArray ? "[" + k + "]" : k;
+        Object.assign(tdK.style, {
+            padding: "2px 6px",
+            borderBottom: "1px solid " + borderColor,
+            color: isArray ? "#ce93d8" : "#6fc",
+            verticalAlign: "top",
+            whiteSpace: "nowrap",
+            width: "1%"
+        });
+
+        const tdV = document.createElement("td");
+        Object.assign(tdV.style, {
+            padding: "2px 6px",
+            borderBottom: "1px solid " + borderColor,
+            verticalAlign: "top"
+        });
+        tdV.appendChild(_ls_render_json_value(v, depth + 1));
+
+        tr.appendChild(tdK);
+        tr.appendChild(tdV);
+        tbl.appendChild(tr);
+    }
+
+    const wrapper = document.createElement("div");
+    Object.assign(wrapper.style, {
+        border: "1px solid " + borderColor,
+        borderRadius: "3px",
+        overflow: "hidden"
+    });
+    wrapper.appendChild(tbl);
+    return wrapper;
+}
+
+/* Framework lifecycle reactor */
+function component_localstorage_handle_init() {
+    ServiceWindow.registerApp("localstorage", component_localstorage_launch);
 }
 
 // ===== src/component_tab_ascii.js =====
@@ -1796,7 +2182,7 @@ const FRAMEWORK_LAUNCHER_LEFT = 10;        // px from viewport left
 
 let _framework_launcher_count = 0;
 
-function framework_launcher_register(textContent, onlaunch) {
+function framework_launcher_register_simple(textContent, onlaunch) {
 
     const slotIndex = _framework_launcher_count;
     _framework_launcher_count++;
@@ -1831,6 +2217,34 @@ function framework_launcher_register(textContent, onlaunch) {
     };
 
     document.body.appendChild(btn);
+}
+
+function framework_launcher_register_kdeubuntu(textContent, onlaunch) {
+    framework_launcher_kdeubuntu_register(textContent, onlaunch);
+}
+
+/* Public API for components to register launcher buttons. Switches between the
+   simple stacked-button style and the KDE/Ubuntu-style desktop shell. */
+
+function framework_launcher_register(textContent, onlaunch) {
+    framework_launcher_register_kdeubuntu(textContent, onlaunch);
+}
+
+// ===== src/framework_launcher_kdeubuntu.js =====
+// -----------------------------------------------------------------------------
+// framework_launcher_kdeubuntu.js — KDE/Ubuntu-style launcher registration.
+//
+// Thin wrapper around service_taskbar.js. The taskbar service owns all DOM:
+// wallpaper, bottom taskbar, Start button + Start menu (search + scrollable
+// app list), running-apps list, system tray, up arrow for overflow, and
+// clock. This file just exposes the registration entrypoint that
+// framework_launcher.js delegates to.
+// -----------------------------------------------------------------------------
+
+function framework_launcher_kdeubuntu_register(textContent, onlaunch) {
+
+    service_taskbar_init();
+    service_taskbar_register_app(textContent, onlaunch);
 }
 
 // ===== src/framework_scrollbars.js =====
@@ -2019,6 +2433,84 @@ function showResultDialog(title, body) {
     document.body.appendChild(overlay);
 
     closeBtn.focus();
+}
+
+// ===== src/service_fs.js =====
+// -----------------------------------------------------------------------------
+// service_fs.js — IndexedDB-backed file store seeded by run_app.go.
+//
+// Layout: one IndexedDB database "tm_fs", one object store "files",
+// keyed by the file's relative path under src-fs/ (forward slashes).
+// Each value is { mime, dataUrl } where dataUrl is a fully-formed
+// "data:<mime>;base64,<...>" string suitable for direct use in
+// background-image, <img src>, <iframe srcdoc>, etc.
+//
+// run_app.go walks src-fs/ at boot time and calls window.__tm_seed_fs([...])
+// once with every file. If the seed call lands BEFORE source.js has parsed
+// (race), it stashes the payload in window.__tm_pending_fs and we drain it
+// when this file initialises.
+// -----------------------------------------------------------------------------
+
+const FS_DB_NAME    = "tm_fs";
+const FS_STORE_NAME = "files";
+
+function _fs_open() {
+    return new Promise((resolve, reject) => {
+        const req = indexedDB.open(FS_DB_NAME, 1);
+        req.onupgradeneeded = () => {
+            const db = req.result;
+            if (!db.objectStoreNames.contains(FS_STORE_NAME)) {
+                db.createObjectStore(FS_STORE_NAME);
+            }
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror   = () => reject(req.error);
+    });
+}
+
+function service_fs_put(path, mime, dataUrl) {
+    return _fs_open().then(db => new Promise((res, rej) => {
+        const tx = db.transaction(FS_STORE_NAME, "readwrite");
+        tx.objectStore(FS_STORE_NAME).put({ mime, dataUrl }, path);
+        tx.oncomplete = () => res();
+        tx.onerror    = () => rej(tx.error);
+    }));
+}
+
+/* Returns { mime, dataUrl } or null. dataUrl is directly usable in
+   background-image / <img src> / <iframe srcdoc>. */
+function service_fs_get(path) {
+    return _fs_open().then(db => new Promise((res, rej) => {
+        const tx = db.transaction(FS_STORE_NAME, "readonly");
+        const r  = tx.objectStore(FS_STORE_NAME).get(path);
+        r.onsuccess = () => res(r.result || null);
+        r.onerror   = () => rej(r.error);
+    }));
+}
+
+function service_fs_list() {
+    return _fs_open().then(db => new Promise((res, rej) => {
+        const tx = db.transaction(FS_STORE_NAME, "readonly");
+        const r  = tx.objectStore(FS_STORE_NAME).getAllKeys();
+        r.onsuccess = () => res(r.result || []);
+        r.onerror   = () => rej(r.error);
+    }));
+}
+
+/* Called by run_app.go (via Runtime.evaluate) after source.js is loaded.
+   `entries` is [{ path, mime, b64 }, ...]. */
+window.__tm_seed_fs = function (entries) {
+    if (!Array.isArray(entries)) return Promise.resolve();
+    const promises = entries.map(e =>
+        service_fs_put(e.path, e.mime, "data:" + e.mime + ";base64," + e.b64)
+    );
+    return Promise.all(promises);
+};
+
+/* Drain any pre-seed payload that arrived before source.js parsed. */
+if (Array.isArray(window.__tm_pending_fs)) {
+    window.__tm_seed_fs(window.__tm_pending_fs);
+    window.__tm_pending_fs = null;
 }
 
 // ===== src/service_llm.js =====
@@ -2388,6 +2880,534 @@ function flushLlmQueue() {
 
         try { job.resolve(ctx); } catch (_) { }
     });
+}
+
+// ===== src/service_taskbar.js =====
+// -----------------------------------------------------------------------------
+// service_taskbar.js — KDE/Ubuntu-style desktop shell + open-windows tracker.
+//
+// Provides:
+//   service_taskbar_init()                 — idempotent. Builds the full-screen
+//                                            wallpaper, the bottom taskbar
+//                                            (start button, running apps list,
+//                                            system tray, up arrow, clock),
+//                                            and patches ServiceWindow.show /
+//                                            .hide / .defaultMinimize so any
+//                                            ServiceWindow instance is tracked
+//                                            in the running-apps list
+//                                            automatically.
+//   service_taskbar_register_app(label, onlaunch)
+//                                          — append an entry to the Start menu.
+//                                            Clicking the entry runs onlaunch.
+//   service_taskbar_minimize_window(sw)    — minimize a tracked ServiceWindow
+//                                            (used by the running-apps button).
+//   service_taskbar_restore_window(sw)     — restore (un-minimize / show) a
+//                                            tracked ServiceWindow.
+//
+// The taskbar button for a window toggles minimize/restore on click. Hidden
+// windows (closed) are removed from the running-apps list automatically.
+// -----------------------------------------------------------------------------
+
+const TASKBAR_HEIGHT = 40;
+
+let _taskbar_initialized = false;
+let _taskbar_apps        = [];   // [{ label, onlaunch }]
+let _taskbar_windows     = [];   // [{ sw, btn }]
+
+let _taskbar_wallpaper_el  = null;
+let _taskbar_el            = null;
+let _taskbar_running_el    = null;
+let _taskbar_start_btn     = null;
+let _taskbar_start_menu    = null;
+let _taskbar_start_search  = null;
+let _taskbar_start_list    = null;
+let _taskbar_tray_el       = null;
+let _taskbar_clock_el      = null;
+let _taskbar_clock_timer   = null;
+
+function service_taskbar_init() {
+
+    if (_taskbar_initialized) return;
+    _taskbar_initialized = true;
+
+    _service_taskbar_build_wallpaper();
+    _service_taskbar_build_taskbar();
+    _service_taskbar_build_start_menu();
+    _service_taskbar_patch_service_window();
+    _service_taskbar_start_clock();
+
+    /* Close start menu when clicking outside it. */
+    document.addEventListener("mousedown", (e) => {
+        if (!_taskbar_start_menu || _taskbar_start_menu.style.display === "none") return;
+        if (_taskbar_start_menu.contains(e.target)) return;
+        if (_taskbar_start_btn.contains(e.target)) return;
+        _service_taskbar_close_start_menu();
+    });
+}
+
+function service_taskbar_register_app(label, onlaunch) {
+    _taskbar_apps.push({ label, onlaunch });
+    _service_taskbar_rebuild_start_list("");
+}
+
+/* ---- Wallpaper ---- */
+
+function _service_taskbar_build_wallpaper() {
+
+    const wp = document.createElement("div");
+
+    /* Solid/gradient fallback applied immediately so the user never sees a
+       white flash. If a wallpaper file lives in the IndexedDB-backed src-fs
+       store, we override the background once it loads. */
+    Object.assign(wp.style, {
+        position: "fixed",
+        left: "0",
+        top: "0",
+        width: "100vw",
+        height: "100vh",
+        zIndex: "1",
+        background: "linear-gradient(135deg, #2b3a55 0%, #1d2b45 50%, #0f1a2e 100%)",
+        pointerEvents: "none"
+    });
+
+    document.body.appendChild(wp);
+    _taskbar_wallpaper_el = wp;
+
+    /* Try a few conventional names; first hit wins. service_fs_get returns
+       null (not throws) for missing keys, so the gradient fallback persists
+       cleanly when nothing matches. */
+    if (typeof service_fs_get === "function") {
+        (async () => {
+            for (const name of ["wallpaper.jpg", "wallpaper.png", "wallpaper.webp", "wallpaper.jpeg"]) {
+                try {
+                    const f = await service_fs_get(name);
+                    if (f && f.dataUrl) {
+                        wp.style.background =
+                            "center/cover no-repeat url('" + f.dataUrl + "')";
+                        return;
+                    }
+                } catch (e) { /* keep trying / fall through to gradient */ }
+            }
+        })();
+    }
+}
+
+/* ---- Taskbar ---- */
+
+function _service_taskbar_build_taskbar() {
+
+    const bar = document.createElement("div");
+
+    Object.assign(bar.style, {
+        position: "fixed",
+        left: "0",
+        bottom: "0",
+        width: "100vw",
+        height: TASKBAR_HEIGHT + "px",
+        zIndex: "1000000",
+        background: "rgba(20, 22, 28, 0.92)",
+        borderTop: "1px solid #000",
+        boxShadow: "0 -2px 8px rgba(0,0,0,0.4)",
+        display: "flex",
+        alignItems: "stretch",
+        color: "white",
+        fontFamily: "sans-serif",
+        fontSize: "12px",
+        userSelect: "none"
+    });
+
+    /* Start button (leftmost) — sunflower icon + "Start" label */
+    const startBtn = document.createElement("button");
+    startBtn.innerHTML =
+        "<svg width='20' height='20' viewBox='0 0 32 32' " +
+        "xmlns='http://www.w3.org/2000/svg' style='vertical-align:middle;margin-right:6px'>" +
+            /* 8 petals around the centre */
+            "<g fill='#ffd54a' stroke='#c98b00' stroke-width='0.8'>" +
+                "<ellipse cx='16' cy='5'  rx='3.2' ry='5.5'/>" +
+                "<ellipse cx='16' cy='27' rx='3.2' ry='5.5'/>" +
+                "<ellipse cx='5'  cy='16' rx='5.5' ry='3.2'/>" +
+                "<ellipse cx='27' cy='16' rx='5.5' ry='3.2'/>" +
+                "<ellipse cx='8'  cy='8'  rx='3.2' ry='5.5' transform='rotate(-45 8 8)'/>" +
+                "<ellipse cx='24' cy='8'  rx='3.2' ry='5.5' transform='rotate(45 24 8)'/>" +
+                "<ellipse cx='8'  cy='24' rx='3.2' ry='5.5' transform='rotate(45 8 24)'/>" +
+                "<ellipse cx='24' cy='24' rx='3.2' ry='5.5' transform='rotate(-45 24 24)'/>" +
+            "</g>" +
+            /* dark seed centre */
+            "<circle cx='16' cy='16' r='5' fill='#5d3a1a' stroke='#2d1a08' stroke-width='0.8'/>" +
+            "<circle cx='14.5' cy='14.5' r='1' fill='#7a4a20'/>" +
+        "</svg>" +
+        "<span>Start</span>";
+    Object.assign(startBtn.style, {
+        background: "#1976d2",
+        color: "white",
+        border: "none",
+        padding: "0 14px",
+        cursor: "pointer",
+        fontWeight: "bold",
+        fontSize: "13px",
+        flexShrink: "0",
+        display: "flex",
+        alignItems: "center"
+    });
+    startBtn.onmouseover = () => { startBtn.style.background = "#2196f3"; };
+    startBtn.onmouseout  = () => { startBtn.style.background = "#1976d2"; };
+    startBtn.onclick = (e) => {
+        e.stopPropagation();
+        _service_taskbar_toggle_start_menu();
+    };
+    bar.appendChild(startBtn);
+    _taskbar_start_btn = startBtn;
+
+    /* Running apps area */
+    const running = document.createElement("div");
+    Object.assign(running.style, {
+        flex: "1",
+        display: "flex",
+        alignItems: "center",
+        gap: "4px",
+        padding: "0 8px",
+        overflow: "hidden"
+    });
+    bar.appendChild(running);
+    _taskbar_running_el = running;
+
+    /* Right-side cluster: up arrow, system tray, clock */
+    const right = document.createElement("div");
+    Object.assign(right.style, {
+        display: "flex",
+        alignItems: "center",
+        gap: "6px",
+        padding: "0 10px",
+        flexShrink: "0",
+        borderLeft: "1px solid rgba(255,255,255,0.08)"
+    });
+
+    /* Up arrow — placeholder for "more apps" overflow popup */
+    const up = document.createElement("button");
+    up.textContent = "▲";
+    Object.assign(up.style, {
+        background: "transparent",
+        color: "#ccc",
+        border: "none",
+        cursor: "pointer",
+        fontSize: "11px",
+        padding: "4px 6px"
+    });
+    up.title = "Show hidden icons";
+    up.onclick = () => {
+        /* TODO: render an overflow popup. For now, no-op. */
+    };
+    right.appendChild(up);
+
+    /* System tray (empty) */
+    const tray = document.createElement("div");
+    Object.assign(tray.style, {
+        display: "flex",
+        alignItems: "center",
+        gap: "4px",
+        minWidth: "20px",
+        padding: "0 4px"
+    });
+    right.appendChild(tray);
+    _taskbar_tray_el = tray;
+
+    /* Clock — date + time, two lines, right-aligned */
+    const clock = document.createElement("div");
+    Object.assign(clock.style, {
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "flex-end",
+        justifyContent: "center",
+        fontSize: "11px",
+        lineHeight: "1.2",
+        minWidth: "70px",
+        cursor: "default"
+    });
+    right.appendChild(clock);
+    _taskbar_clock_el = clock;
+
+    bar.appendChild(right);
+
+    document.body.appendChild(bar);
+    _taskbar_el = bar;
+}
+
+function _service_taskbar_start_clock() {
+
+    const tick = () => {
+        if (!_taskbar_clock_el) return;
+        const now = new Date();
+        const hh = String(now.getHours()).padStart(2, "0");
+        const mm = String(now.getMinutes()).padStart(2, "0");
+        const dd = String(now.getDate()).padStart(2, "0");
+        const mo = String(now.getMonth() + 1).padStart(2, "0");
+        const yy = now.getFullYear();
+        _taskbar_clock_el.innerHTML =
+            "<div>" + hh + ":" + mm + "</div>" +
+            "<div style='color:#aaa'>" + dd + "/" + mo + "/" + yy + "</div>";
+    };
+
+    tick();
+    _taskbar_clock_timer = setInterval(tick, 15000);
+}
+
+/* ---- Start menu ---- */
+
+function _service_taskbar_build_start_menu() {
+
+    const menu = document.createElement("div");
+
+    Object.assign(menu.style, {
+        position: "fixed",
+        left: "0",
+        bottom: TASKBAR_HEIGHT + "px",
+        width: "320px",
+        height: "420px",
+        zIndex: "1000001",
+        background: "rgba(28, 30, 36, 0.97)",
+        border: "1px solid #000",
+        borderBottom: "none",
+        boxShadow: "0 -4px 20px rgba(0,0,0,0.5)",
+        display: "none",
+        flexDirection: "column",
+        color: "white",
+        fontFamily: "sans-serif",
+        fontSize: "13px"
+    });
+
+    /* Search */
+    const searchWrap = document.createElement("div");
+    Object.assign(searchWrap.style, {
+        padding: "10px",
+        borderBottom: "1px solid rgba(255,255,255,0.08)"
+    });
+
+    const search = document.createElement("input");
+    search.type = "text";
+    search.placeholder = "Search apps…";
+    Object.assign(search.style, {
+        width: "100%",
+        boxSizing: "border-box",
+        background: "#15171c",
+        color: "white",
+        border: "1px solid #333",
+        borderRadius: "4px",
+        padding: "6px 8px",
+        fontSize: "13px",
+        outline: "none"
+    });
+    search.addEventListener("input", () => {
+        _service_taskbar_rebuild_start_list(search.value || "");
+    });
+    search.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+            /* Launch the first visible match. */
+            const first = _taskbar_start_list.querySelector("button[data-app-entry]");
+            if (first) first.click();
+        } else if (e.key === "Escape") {
+            _service_taskbar_close_start_menu();
+        }
+    });
+    searchWrap.appendChild(search);
+    menu.appendChild(searchWrap);
+    _taskbar_start_search = search;
+
+    /* Scrollable apps list */
+    const list = document.createElement("div");
+    Object.assign(list.style, {
+        flex: "1",
+        overflowY: "auto",
+        padding: "6px 0"
+    });
+    menu.appendChild(list);
+    _taskbar_start_list = list;
+
+    document.body.appendChild(menu);
+    _taskbar_start_menu = menu;
+}
+
+function _service_taskbar_rebuild_start_list(filter) {
+
+    if (!_taskbar_start_list) return;
+
+    const f = (filter || "").toLowerCase().trim();
+    _taskbar_start_list.innerHTML = "";
+
+    const matches = _taskbar_apps.filter(a =>
+        !f || a.label.toLowerCase().includes(f)
+    );
+
+    if (matches.length === 0) {
+        const empty = document.createElement("div");
+        empty.textContent = "No apps found";
+        Object.assign(empty.style, {
+            padding: "12px",
+            color: "#888",
+            fontStyle: "italic"
+        });
+        _taskbar_start_list.appendChild(empty);
+        return;
+    }
+
+    matches.forEach(app => {
+        const entry = document.createElement("button");
+        entry.dataset.appEntry = "1";
+        entry.textContent = app.label;
+        Object.assign(entry.style, {
+            display: "block",
+            width: "100%",
+            textAlign: "left",
+            background: "transparent",
+            color: "white",
+            border: "none",
+            padding: "8px 14px",
+            cursor: "pointer",
+            fontSize: "13px",
+            fontFamily: "inherit"
+        });
+        entry.onmouseover = () => { entry.style.background = "rgba(255,255,255,0.08)"; };
+        entry.onmouseout  = () => { entry.style.background = "transparent"; };
+        entry.onclick = () => {
+            _service_taskbar_close_start_menu();
+            try { app.onlaunch(); }
+            catch (err) { console.error("taskbar launch threw:", err); }
+        };
+        _taskbar_start_list.appendChild(entry);
+    });
+}
+
+function _service_taskbar_toggle_start_menu() {
+    if (!_taskbar_start_menu) return;
+    if (_taskbar_start_menu.style.display === "none") {
+        _taskbar_start_menu.style.display = "flex";
+        _taskbar_start_search.value = "";
+        _service_taskbar_rebuild_start_list("");
+        setTimeout(() => _taskbar_start_search.focus(), 0);
+    } else {
+        _service_taskbar_close_start_menu();
+    }
+}
+
+function _service_taskbar_close_start_menu() {
+    if (_taskbar_start_menu) _taskbar_start_menu.style.display = "none";
+}
+
+/* ---- Open-windows tracking ---- */
+
+function _service_taskbar_patch_service_window() {
+
+    if (typeof ServiceWindow === "undefined") return;
+
+    const origShow = ServiceWindow.prototype.show;
+    const origHide = ServiceWindow.prototype.hide;
+    const origMin  = ServiceWindow.prototype.defaultMinimize;
+    const origMax  = ServiceWindow.prototype.defaultMaximize;
+
+    ServiceWindow.prototype.show = function () {
+        origShow.call(this);
+        _service_taskbar_on_show(this);
+    };
+
+    ServiceWindow.prototype.hide = function () {
+        origHide.call(this);
+        _service_taskbar_on_hide(this);
+    };
+
+    ServiceWindow.prototype.defaultMinimize = function () {
+        origMin.call(this);
+        _service_taskbar_update_button(this);
+    };
+
+    ServiceWindow.prototype.defaultMaximize = function () {
+        origMax.call(this);
+        _service_taskbar_update_button(this);
+    };
+}
+
+function _service_taskbar_find_entry(sw) {
+    return _taskbar_windows.find(w => w.sw === sw) || null;
+}
+
+function _service_taskbar_on_show(sw) {
+
+    if (!_taskbar_running_el) return;
+    if (_service_taskbar_find_entry(sw)) {
+        _service_taskbar_update_button(sw);
+        return;
+    }
+
+    const label = sw.appName || "Window";
+
+    const btn = document.createElement("button");
+    btn.textContent = label;
+    Object.assign(btn.style, {
+        background: "rgba(255,255,255,0.08)",
+        color: "white",
+        border: "1px solid rgba(255,255,255,0.12)",
+        borderRadius: "3px",
+        padding: "4px 10px",
+        cursor: "pointer",
+        fontSize: "12px",
+        fontFamily: "inherit",
+        maxWidth: "180px",
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        flexShrink: "0"
+    });
+
+    btn.onclick = () => {
+        if (!sw.visible) {
+            sw.show();
+            return;
+        }
+        if (sw.mode === "minimized") {
+            service_taskbar_restore_window(sw);
+        } else {
+            service_taskbar_minimize_window(sw);
+        }
+    };
+
+    _taskbar_running_el.appendChild(btn);
+    _taskbar_windows.push({ sw, btn });
+    _service_taskbar_update_button(sw);
+}
+
+function _service_taskbar_on_hide(sw) {
+
+    const entry = _service_taskbar_find_entry(sw);
+    if (!entry) return;
+
+    if (entry.btn.parentElement) entry.btn.parentElement.removeChild(entry.btn);
+    const idx = _taskbar_windows.indexOf(entry);
+    if (idx >= 0) _taskbar_windows.splice(idx, 1);
+}
+
+function _service_taskbar_update_button(sw) {
+
+    const entry = _service_taskbar_find_entry(sw);
+    if (!entry) return;
+
+    if (sw.mode === "minimized") {
+        entry.btn.style.background = "rgba(255,255,255,0.04)";
+        entry.btn.style.borderBottom = "1px solid rgba(255,255,255,0.12)";
+        entry.btn.style.color = "#aaa";
+    } else {
+        entry.btn.style.background = "rgba(255,255,255,0.14)";
+        entry.btn.style.borderBottom = "2px solid #4fc3f7";
+        entry.btn.style.color = "white";
+    }
+}
+
+function service_taskbar_minimize_window(sw) {
+    if (!sw) return;
+    if (sw.mode !== "minimized") sw.defaultMinimize();
+}
+
+function service_taskbar_restore_window(sw) {
+    if (!sw) return;
+    if (!sw.visible) sw.show();
+    if (sw.mode === "minimized") sw.defaultMinimize();   // toggles back to normal
 }
 
 // ===== src/service_undoredo.js =====

@@ -55,10 +55,13 @@ function framework_launcher_register_simple(textContent, onlaunch) {
     document.body.appendChild(btn);
 }
 
-/* Public API for components to register launcher buttons. Delegates to the
-   simple registration function for now, but we could add more complex options
-   here later if needed. */
+function framework_launcher_register_kdeubuntu(textContent, onlaunch) {
+    framework_launcher_kdeubuntu_register(textContent, onlaunch);
+}
+
+/* Public API for components to register launcher buttons. Switches between the
+   simple stacked-button style and the KDE/Ubuntu-style desktop shell. */
 
 function framework_launcher_register(textContent, onlaunch) {
-    framework_launcher_register_simple(textContent, onlaunch);
+    framework_launcher_register_kdeubuntu(textContent, onlaunch);
 }

@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/url"
@@ -214,6 +215,14 @@ func run() error {
 	fmt.Println("DevTools response:")
 	fmt.Println(resp)
 
+	// Seed the IndexedDB-backed src-fs store. This must run AFTER source.js
+	// has been injected, because we call window.__tm_seed_fs which is defined
+	// by service_fs.js. Missing src-fs/ is not an error — many builds won't
+	// ship one.
+	if err := injectSrcFs(wsURL, "src-fs"); err != nil {
+		fmt.Printf("warn: src-fs injection failed: %v\n", err)
+	}
+
 	// Tear down the booting splash now that source.js has been injected.
 	removeExpr := `(function(){
         var el = document.getElementById("tm-booting-splash");
@@ -227,6 +236,103 @@ func run() error {
 		fmt.Printf("Booting splash removal: %s\n", rmResp)
 	}
 	return nil
+}
+
+// injectSrcFs walks `dir` recursively, base64-encodes every file, and sends
+// one Runtime.evaluate that calls window.__tm_seed_fs([...]) inside the page.
+// The userscript's service_fs.js owns __tm_seed_fs and writes each entry to
+// IndexedDB under its relative path. Missing dir is not an error.
+//
+// Each file becomes one __tm_seed_fs([{path,mime,b64}]) call so the WS frame
+// stays small and one bad file doesn't sink the whole batch.
+func injectSrcFs(wsURL, dir string) error {
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		fmt.Printf("No %s/ directory to seed (skipping IndexedDB seed).\n", dir)
+		return nil
+	}
+
+	id := 8000
+	count := 0
+	walkErr := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		rel, err := filepath.Rel(dir, p)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+
+		data, err := os.ReadFile(p)
+		if err != nil {
+			fmt.Printf("  warn: read %s: %v\n", p, err)
+			return nil
+		}
+		mime := mimeByExt(filepath.Ext(p))
+		b64 := base64.StdEncoding.EncodeToString(data)
+
+		entry := []map[string]string{{
+			"path": rel,
+			"mime": mime,
+			"b64":  b64,
+		}}
+		payload, _ := json.Marshal(entry)
+		expr := "window.__tm_seed_fs(" + string(payload) + ");"
+
+		if _, err := evaluateExpression(wsURL, &id, expr); err != nil {
+			fmt.Printf("  warn: seed %s failed: %v\n", rel, err)
+			return nil
+		}
+		fmt.Printf("  src-fs[%q] = %s, %d bytes\n", rel, mime, len(data))
+		count++
+		return nil
+	})
+	if walkErr != nil {
+		return walkErr
+	}
+	fmt.Printf("Seeded %d file(s) into IndexedDB store tm_fs/files.\n", count)
+	return nil
+}
+
+// mimeByExt returns a best-effort MIME type for the given extension.
+// Conservative defaults — falls back to application/octet-stream.
+func mimeByExt(ext string) string {
+	switch strings.ToLower(ext) {
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	case ".webp":
+		return "image/webp"
+	case ".gif":
+		return "image/gif"
+	case ".svg":
+		return "image/svg+xml"
+	case ".ico":
+		return "image/x-icon"
+	case ".bmp":
+		return "image/bmp"
+	case ".css":
+		return "text/css"
+	case ".html", ".htm":
+		return "text/html"
+	case ".js":
+		return "application/javascript"
+	case ".json":
+		return "application/json"
+	case ".txt":
+		return "text/plain"
+	case ".woff":
+		return "font/woff"
+	case ".woff2":
+		return "font/woff2"
+	case ".ttf":
+		return "font/ttf"
+	case ".otf":
+		return "font/otf"
+	}
+	return "application/octet-stream"
 }
 
 func loadSettings(path string) (*appSettings, error) {
