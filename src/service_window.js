@@ -40,6 +40,7 @@ class ServiceWindow {
         this.titleEl         = null;
         this._tabs           = [];   // [{ id, button }]
         this._activeTabId    = null;
+        this._lastActiveAt   = 0;    // timestamp set on each _markActive call
     }
 
     /* Build container + header + min/max/close + drag wiring + resize handle.
@@ -80,7 +81,7 @@ class ServiceWindow {
             height: height + "px",
             background: "#1e1e1e",
             border: "1px solid #333",
-            borderRadius: "8px",
+            borderRadius: "0",
             zIndex: "999999",
             display: "none",
             flexDirection: "column",
@@ -104,6 +105,15 @@ class ServiceWindow {
 
         this.container.appendChild(this.headerEl);
         document.body.appendChild(this.container);
+
+        /* Register so static _repaintBorders() can find every live instance
+           when the active window changes. */
+        ServiceWindow._instances.push(this);
+
+        /* Mark this window active on any mousedown inside it. Capture phase
+           so we observe even clicks that get e.stopPropagation'd by inner
+           controls. */
+        this.container.addEventListener("mousedown", () => this._markActive(), true);
 
         /* Tab bar (left side of header) — registerTab() appends buttons here. */
         this.tabBarEl = document.createElement("div");
@@ -193,12 +203,40 @@ class ServiceWindow {
         return this;
     }
 
+    /* ---- Active window tracking ----
+       The "active" window is the most recently shown or interacted-with
+       ServiceWindow. Hotkey handlers (e.g. Alt+Q to close) read this so
+       there's a clear target when the user has multiple windows open.
+       _instances is an internal registry so _markActive can repaint every
+       window's border on each focus change. */
+    static _active = null;
+    static _instances = [];
+
+    static activeWindow() {
+        return ServiceWindow._active;
+    }
+
+    _markActive() {
+        ServiceWindow._active = this;
+        this._lastActiveAt = Date.now();
+        ServiceWindow._repaintBorders();
+    }
+
+    static _repaintBorders() {
+        for (const w of ServiceWindow._instances) {
+            if (!w.container) continue;
+            const isActive = (w === ServiceWindow._active);
+            w.container.style.borderColor = isActive ? "#4fc3f7" : "#333";
+        }
+    }
+
     /* ---- Show / hide (auto-persists visibility) ---- */
 
     show() {
         if (!this.container) return;
         this.container.style.display = "flex";
         this.visible = true;
+        this._markActive();
         /* If the persisted position has drifted off-screen (e.g. browser was
            resized smaller while the window was closed), pull the window back
            to the centre of the viewport. Maximised windows are always
@@ -238,7 +276,38 @@ class ServiceWindow {
         if (!this.container) return;
         this.container.style.display = "none";
         this.visible = false;
+        /* Promote the most-recently-interacted-with visible peer to active.
+           Picking by max _lastActiveAt matches OS focus-fallback semantics:
+           when you close the front window, the previously front-most one
+           returns to focus, not an arbitrary other. If nothing is visible
+           any more, _active clears. */
+        if (ServiceWindow._active === this) {
+            const next = ServiceWindow._pickPromotion(this);
+            if (next) {
+                next._markActive();   // sets _active + repaints
+            } else {
+                ServiceWindow._active = null;
+                ServiceWindow._repaintBorders();
+            }
+        }
         this.persistState();
+    }
+
+    /* Choose which visible peer (excluding `closing`) should become active
+       after `closing` is hidden. Returns null when no eligible peer exists. */
+    static _pickPromotion(closing) {
+        let best = null;
+        let bestAt = -1;
+        for (const w of ServiceWindow._instances) {
+            if (w === closing) continue;
+            if (!w.visible) continue;
+            if (!w.container) continue;
+            if (w._lastActiveAt > bestAt) {
+                best = w;
+                bestAt = w._lastActiveAt;
+            }
+        }
+        return best;
     }
 
     /* ---- Default window-control behaviours ---- */

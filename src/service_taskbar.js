@@ -219,9 +219,36 @@ function _service_taskbar_build_taskbar() {
             "<rect class='tm-pane tm-pane-br' x='13' y='13' width='9' height='9'/>" +
         "</svg>" +
         "<span>Start</span>";
+    /* Glossy / glass 3D look — solid blue base + a top-half white reflection
+       and a hard reflection line at the midpoint. Inner top highlight + outer
+       drop shadow give it physical depth. Hover and active are the same
+       background recipe shifted lighter / darker. */
+    const startBgRest =
+        "linear-gradient(180deg," +
+            "rgba(255,255,255,0.55) 0%," +
+            "rgba(255,255,255,0.15) 49%," +
+            "rgba(0,0,0,0.05) 50%," +
+            "rgba(255,255,255,0.0) 100%)," +
+        "#2196f3";
+    const startBgHover =
+        "linear-gradient(180deg," +
+            "rgba(255,255,255,0.65) 0%," +
+            "rgba(255,255,255,0.20) 49%," +
+            "rgba(0,0,0,0.05) 50%," +
+            "rgba(255,255,255,0.0) 100%)," +
+        "#42a5f5";
+    const startBgActive =
+        "linear-gradient(180deg," +
+            "rgba(0,0,0,0.10) 0%," +
+            "rgba(255,255,255,0.10) 49%," +
+            "rgba(255,255,255,0.30) 50%," +
+            "rgba(255,255,255,0.0) 100%)," +
+        "#1976d2";
+
     Object.assign(startBtn.style, {
-        background: "#2196f3",
+        background: startBgRest,
         color: "white",
+        textShadow: "0 1px 0 rgba(0,0,0,0.35)",
         border: "none",
         borderRight: "1px solid rgba(255,255,255,0.12)",
         padding: "0 14px",
@@ -230,10 +257,26 @@ function _service_taskbar_build_taskbar() {
         fontSize: "13px",
         flexShrink: "0",
         display: "flex",
-        alignItems: "center"
+        alignItems: "center",
+        boxShadow:
+            "inset 0 1px 0 rgba(255,255,255,0.6)," +
+            "0 2px 4px rgba(0,0,0,0.4)",
+        transition: "background 120ms ease, transform 80ms ease"
     });
-    startBtn.onmouseover = () => { startBtn.style.background = "#42a5f5"; };
-    startBtn.onmouseout  = () => { startBtn.style.background = "#2196f3"; };
+    startBtn.onmouseover = () => { startBtn.style.background = startBgHover; };
+    startBtn.onmouseout  = () => {
+        startBtn.style.background = startBgRest;
+        startBtn.style.transform  = "none";
+    };
+    startBtn.onmousedown  = () => {
+        startBtn.style.background = startBgActive;
+        /* Tiny press: 1px down + slightly compressed shadow gives the gel a
+           push-in feel without affecting layout of neighbours. */
+        startBtn.style.transform = "translateY(1px)";
+    };
+    startBtn.onmouseup    = () => {
+        startBtn.style.transform = "none";
+    };
     startBtn.onclick = (e) => {
         e.stopPropagation();
         /* Re-trigger click animation: remove + force reflow + re-add. */
@@ -531,20 +574,39 @@ function _service_taskbar_close_start_menu() {
     if (_taskbar_start_menu) _taskbar_start_menu.style.display = "none";
 }
 
-/* Alt+X toggles the start menu. Listener is attached at capture phase on
-   window so it fires regardless of which textarea / iframe-less element
-   currently has focus. preventDefault + stopPropagation prevent the page
-   (or any other component hotkey) from also reacting to the chord. */
+/* Alt+X toggles the start menu. Alt+W closes the active window (the most
+   recently shown / mousedown'd ServiceWindow — see ServiceWindow._active).
+   Listener attached at capture phase on window so it fires regardless of
+   which textarea / button currently has focus. preventDefault +
+   stopPropagation prevent the page from also reacting to the chord. */
 function _service_taskbar_install_hotkey() {
 
     window.addEventListener("keydown", (e) => {
         if (!e.altKey) return;
         if (e.ctrlKey || e.metaKey || e.shiftKey) return;
-        if ((e.key || "").toLowerCase() !== "x") return;
 
-        e.preventDefault();
-        e.stopPropagation();
-        _service_taskbar_toggle_start_menu();
+        const k = (e.key || "").toLowerCase();
+
+        if (k === "x") {
+            e.preventDefault();
+            e.stopPropagation();
+            _service_taskbar_toggle_start_menu();
+            return;
+        }
+
+        if (k === "w") {
+            const sw = (typeof ServiceWindow !== "undefined") && ServiceWindow.activeWindow();
+            if (sw) {
+                e.preventDefault();
+                e.stopPropagation();
+                /* Use the window's own close path — this routes through the
+                   default close handler, hide(), and persistState(), so the
+                   taskbar entry is removed and the system_restore session
+                   is updated correctly. */
+                sw.defaultClose();
+            }
+            return;
+        }
     }, true);
 }
 
