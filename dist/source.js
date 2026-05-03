@@ -3202,7 +3202,14 @@ function _service_taskbar_build_wallpaper() {
 
     /* Solid/gradient fallback applied immediately so the user never sees a
        white flash. If a wallpaper file lives in the IndexedDB-backed src-fs
-       store, we override the background once it loads. */
+       store, we override the background once it loads.
+
+       pointerEvents: "auto" so the wallpaper behaves like an OS desktop —
+       it eats clicks/hovers instead of letting them fall through to the
+       chatgpt.com page underneath. When the user toggles "Hide desktop
+       shell" the wallpaper element gets display:none, which removes it
+       from hit-testing entirely, so the underlying page becomes
+       interactive again. */
     Object.assign(wp.style, {
         position: "fixed",
         left: "0",
@@ -3211,7 +3218,13 @@ function _service_taskbar_build_wallpaper() {
         height: "100vh",
         zIndex: "1",
         background: "linear-gradient(135deg, #2b3a55 0%, #1d2b45 50%, #0f1a2e 100%)",
-        pointerEvents: "none"
+        pointerEvents: "auto"
+    });
+
+    /* Clicking the empty wallpaper closes any open start menu — mimics OS
+       "click empty desktop dismisses popups" behaviour. */
+    wp.addEventListener("mousedown", () => {
+        _service_taskbar_close_start_menu();
     });
 
     document.body.appendChild(wp);
@@ -4259,6 +4272,12 @@ class ServiceWindow {
        window's border on each focus change. */
     static _active = null;
     static _instances = [];
+    /* Monotonic z-index counter. Bumped on every _markActive so the most
+       recently focused window always paints on top. Starts at the original
+       fixed z-index used for windows so we stay below the taskbar (which
+       sits at 1000000+). The counter is unbounded but practically can't
+       overflow within a session. */
+    static _zCounter = 999999;
 
     static activeWindow() {
         return ServiceWindow._active;
@@ -4267,13 +4286,20 @@ class ServiceWindow {
     _markActive() {
         ServiceWindow._active = this;
         this._lastActiveAt = Date.now();
+        if (this.container) {
+            ServiceWindow._zCounter++;
+            this.container.style.zIndex = String(ServiceWindow._zCounter);
+        }
         ServiceWindow._repaintBorders();
     }
 
     static _repaintBorders() {
         for (const w of ServiceWindow._instances) {
             if (!w.container) continue;
-            const isActive = (w === ServiceWindow._active);
+            /* Maximised windows reach to the viewport edges — a 1px cyan
+               accent there reads as a stray line, not as focus. So the
+               cyan only paints on active AND not-maximised windows. */
+            const isActive = (w === ServiceWindow._active) && (w.mode !== "maximized");
             w.container.style.borderColor = isActive ? "#4fc3f7" : "#333";
         }
     }
@@ -4398,6 +4424,7 @@ class ServiceWindow {
             this.mode = "normal";
         }
 
+        ServiceWindow._repaintBorders();
         this.persistState();
     }
 
@@ -4433,6 +4460,7 @@ class ServiceWindow {
             this.mode = "normal";
         }
 
+        ServiceWindow._repaintBorders();
         this.persistState();
     }
 

@@ -211,6 +211,12 @@ class ServiceWindow {
        window's border on each focus change. */
     static _active = null;
     static _instances = [];
+    /* Monotonic z-index counter. Bumped on every _markActive so the most
+       recently focused window always paints on top. Starts at the original
+       fixed z-index used for windows so we stay below the taskbar (which
+       sits at 1000000+). The counter is unbounded but practically can't
+       overflow within a session. */
+    static _zCounter = 999999;
 
     static activeWindow() {
         return ServiceWindow._active;
@@ -219,13 +225,20 @@ class ServiceWindow {
     _markActive() {
         ServiceWindow._active = this;
         this._lastActiveAt = Date.now();
+        if (this.container) {
+            ServiceWindow._zCounter++;
+            this.container.style.zIndex = String(ServiceWindow._zCounter);
+        }
         ServiceWindow._repaintBorders();
     }
 
     static _repaintBorders() {
         for (const w of ServiceWindow._instances) {
             if (!w.container) continue;
-            const isActive = (w === ServiceWindow._active);
+            /* Maximised windows reach to the viewport edges — a 1px cyan
+               accent there reads as a stray line, not as focus. So the
+               cyan only paints on active AND not-maximised windows. */
+            const isActive = (w === ServiceWindow._active) && (w.mode !== "maximized");
             w.container.style.borderColor = isActive ? "#4fc3f7" : "#333";
         }
     }
@@ -350,6 +363,7 @@ class ServiceWindow {
             this.mode = "normal";
         }
 
+        ServiceWindow._repaintBorders();
         this.persistState();
     }
 
@@ -385,6 +399,7 @@ class ServiceWindow {
             this.mode = "normal";
         }
 
+        ServiceWindow._repaintBorders();
         this.persistState();
     }
 
