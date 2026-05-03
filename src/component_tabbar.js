@@ -124,8 +124,6 @@ function switchTab(tabName) {
 
     if (tabName === "editor") {
 
-        if (waitAbortController) waitAbortController.abort();
-
         asciiTA.style.display = "none";
         questionTA.style.display = "none";
         snippetsTA.style.display = "none";

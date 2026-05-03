@@ -21,10 +21,7 @@ function setSpreviewContent(html) {
     spreviewFrame.srcdoc = html;
 }
 
-async function generateSpreview(code, hash) {
-
-    waitAbortController = new AbortController();
-    showWaitingUI();
+function generateSpreview(code, hash) {
 
     const prompt = "Take the following source code and produce a single, self-contained HTML document that displays it " +
         "with advanced, IDE-quality syntax highlighting. Requirements:\n\n" +
@@ -68,13 +65,25 @@ async function generateSpreview(code, hash) {
         "9. Respond ONLY with the complete HTML document, nothing else — no explanations, no markdown fences\n\n" +
         "Code:\n" + code;
 
-    try {
-        const response = await sendMessage(prompt);
+    const onstart = (ctx) => {
+        waitAbortController = new AbortController();
+        showWaitingUI();
+    };
 
-        if (waitAbortController && waitAbortController.signal.aborted) return;
+    const onend = (ctx) => {
+        const wasAborted = waitAbortController && waitAbortController.signal.aborted;
+        waitAbortController = null;
+        hideWaitingUI();
 
-        if (response) {
-            let html = response
+        if (wasAborted || ctx.cancelled) return;
+
+        if (ctx.error) {
+            if (activeTab === "spreview") setSpreviewContent("<p style='font-family:monospace;padding:20px;color:red'>(Error: " + ctx.error.message + ")</p>");
+            return;
+        }
+
+        if (ctx.result) {
+            let html = ctx.result
                 .replace(/^```html?\n?/i, "")
                 .replace(/```\s*$/, "")
                 .trim();
@@ -87,10 +96,7 @@ async function generateSpreview(code, hash) {
         } else {
             if (activeTab === "spreview") setSpreviewContent("<p style='font-family:monospace;padding:20px;color:red'>(Failed to generate preview)</p>");
         }
-    } catch (e) {
-        if (activeTab === "spreview") setSpreviewContent("<p style='font-family:monospace;padding:20px;color:red'>(Error: " + e.message + ")</p>");
-    } finally {
-        waitAbortController = null;
-        hideWaitingUI();
-    }
+    };
+
+    submitMessage(prompt, onstart, onend);
 }

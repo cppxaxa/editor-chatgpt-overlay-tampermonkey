@@ -8,10 +8,7 @@ let questionTA;
 let questionCache = { hash: null, content: "" };
 const QUESTION_CACHE_KEY = "tm_question_cache";
 
-async function generateQuestion(code, hash) {
-
-    waitAbortController = new AbortController();
-    showWaitingUI();
+function generateQuestion(code, hash) {
 
     const prompt = "Analyze the following code (it may be partial/half-written) and figure out what problem it is solving. " +
         "If it is a LeetCode problem, identify the question number and title. Follow this EXACT format:\n\n" +
@@ -30,22 +27,31 @@ async function generateQuestion(code, hash) {
         "Enclose your ENTIRE response inside ```md and ``` so it is treated as markdown code.\n\n" +
         "Code:\n" + code;
 
-    try {
-        const response = await sendMessage(prompt);
+    const onstart = (ctx) => {
+        waitAbortController = new AbortController();
+        showWaitingUI();
+    };
 
-        if (waitAbortController && waitAbortController.signal.aborted) return;
+    const onend = (ctx) => {
+        const wasAborted = waitAbortController && waitAbortController.signal.aborted;
+        waitAbortController = null;
+        hideWaitingUI();
 
-        if (response) {
-            questionCache = { hash: hash, content: response };
+        if (wasAborted || ctx.cancelled) return;
+
+        if (ctx.error) {
+            if (activeTab === "question") questionTA.value = "(Error generating question: " + ctx.error.message + ")";
+            return;
+        }
+
+        if (ctx.result) {
+            questionCache = { hash: hash, content: ctx.result };
             try { localStorage.setItem(QUESTION_CACHE_KEY, JSON.stringify(questionCache)); } catch (e) {}
-            if (activeTab === "question") questionTA.value = response;
+            if (activeTab === "question") questionTA.value = ctx.result;
         } else {
             if (activeTab === "question") questionTA.value = "(Failed to generate question)";
         }
-    } catch (e) {
-        if (activeTab === "question") questionTA.value = "(Error generating question: " + e.message + ")";
-    } finally {
-        waitAbortController = null;
-        hideWaitingUI();
-    }
+    };
+
+    submitMessage(prompt, onstart, onend);
 }

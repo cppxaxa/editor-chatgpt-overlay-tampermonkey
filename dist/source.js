@@ -156,7 +156,7 @@ function clearAllMarkers(ta) {
     ta.dispatchEvent(new Event("input"));
 }
 
-async function handleCodeCheck() {
+function handleCodeCheck() {
 
     if (!textarea) return;
 
@@ -202,72 +202,78 @@ async function handleCodeCheck() {
     }
 
     waitAbortController = new AbortController();
-    showWaitingUI();
-
-    await yieldFrame();
 
     const numberedCode = code.split("\n").map((line, i) => (i + 1) + "> " + line).join("\n");
 
-    const response = await sendMessage(CODE_CHECK_PROMPT + numberedCode + "\n```");
+    const onstart = (ctx) => {
+        showWaitingUI();
+    };
 
-    hideWaitingUI();
-    waitAbortController = null;
+    const onend = (ctx) => {
+        hideWaitingUI();
+        waitAbortController = null;
 
-    if (!response) return;
+        if (ctx.cancelled || ctx.error) return;
 
-    let parsed = null;
+        const response = ctx.result;
+        if (!response) return;
 
-    try {
+        let parsed = null;
 
-        const cleaned = response
-            .replace(/^```[\w]*\n?/gm, "")
-            .replace(/```\s*$/gm, "")
-            .trim();
+        try {
 
-        parsed = JSON.parse(cleaned);
+            const cleaned = response
+                .replace(/^```[\w]*\n?/gm, "")
+                .replace(/```\s*$/gm, "")
+                .trim();
 
-    } catch (e) {
+            parsed = JSON.parse(cleaned);
 
-        showResultDialog("Code Check — Raw Response", response);
-        return;
-    }
+        } catch (e) {
 
-    const correct = parsed.correct ? "✅ Yes" : "❌ No";
-    const solves = parsed.solves_problem ? "✅ Yes" : "❌ No";
-
-    const issueList = parsed.issues && parsed.issues.length
-        ? parsed.issues.map((s, i) => "  " + (i + 1) + ". " + s).join("\n")
-        : "  None";
-
-    const suggestionList = parsed.suggestions && parsed.suggestions.length
-        ? parsed.suggestions.map((s, i) => "  " + (i + 1) + ". " + s).join("\n")
-        : "  None";
-
-    const body =
-        "Correct: " + correct + "\n" +
-        "Solves the problem: " + solves + "\n\n" +
-        "Summary:\n  " + parsed.summary + "\n\n" +
-        "Issues:\n" + issueList + "\n\n" +
-        "Suggestions:\n" + suggestionList;
-
-    checkCache = { hash: hash, parsed: parsed, body: body };
-
-    showResultDialog("Code Check Result", body);
-
-    if (parsed.markers && parsed.markers.length) {
-
-        if (windowMode === "maximized") {
-            textarea.value = mergeColumnContent();
-            insertMarkers(textarea, parsed.markers);
-            const lines = textarea.value.split("\n");
-            const lpc = getLinesPerCol();
-            leftTA.value = lines.slice(0, lpc).join("\n");
-            rightTA.value = lines.slice(lpc).join("\n");
-            saveMergedContent();
-        } else {
-            insertMarkers(textarea, parsed.markers);
+            showResultDialog("Code Check — Raw Response", response);
+            return;
         }
-    }
+
+        const correct = parsed.correct ? "✅ Yes" : "❌ No";
+        const solves = parsed.solves_problem ? "✅ Yes" : "❌ No";
+
+        const issueList = parsed.issues && parsed.issues.length
+            ? parsed.issues.map((s, i) => "  " + (i + 1) + ". " + s).join("\n")
+            : "  None";
+
+        const suggestionList = parsed.suggestions && parsed.suggestions.length
+            ? parsed.suggestions.map((s, i) => "  " + (i + 1) + ". " + s).join("\n")
+            : "  None";
+
+        const body =
+            "Correct: " + correct + "\n" +
+            "Solves the problem: " + solves + "\n\n" +
+            "Summary:\n  " + parsed.summary + "\n\n" +
+            "Issues:\n" + issueList + "\n\n" +
+            "Suggestions:\n" + suggestionList;
+
+        checkCache = { hash: hash, parsed: parsed, body: body };
+
+        showResultDialog("Code Check Result", body);
+
+        if (parsed.markers && parsed.markers.length) {
+
+            if (windowMode === "maximized") {
+                textarea.value = mergeColumnContent();
+                insertMarkers(textarea, parsed.markers);
+                const lines = textarea.value.split("\n");
+                const lpc = getLinesPerCol();
+                leftTA.value = lines.slice(0, lpc).join("\n");
+                rightTA.value = lines.slice(lpc).join("\n");
+                saveMergedContent();
+            } else {
+                insertMarkers(textarea, parsed.markers);
+            }
+        }
+    };
+
+    submitMessage(CODE_CHECK_PROMPT + numberedCode + "\n```", onstart, onend);
 }
 
 // ===== src/component_columns.js =====
@@ -595,7 +601,7 @@ function applyIndent(response, indent) {
     }).join("\n");
 }
 
-async function handleLineAction() {
+function handleLineAction() {
 
     if (!textarea) return;
 
@@ -617,6 +623,33 @@ async function handleLineAction() {
 
     const indent = line.match(/^[ ]*/)[0];
     const trimmed = line.trimStart();
+
+    const replaceLineWithResponse = (response) => {
+
+        const indented = applyIndent(response, indent);
+
+        ta.value =
+            text.substring(0, start) +
+            indented +
+            text.substring(lineEnd);
+
+        ta.dispatchEvent(new Event("input"));
+        localStorage.setItem("tm_editor_content",
+            windowMode === "maximized" ? mergeColumnContent() : textarea.value);
+    };
+
+    const onstart = (ctx) => {
+        waitAbortController = new AbortController();
+        showWaitingUI();
+    };
+
+    const onend = (ctx) => {
+        hideWaitingUI();
+        waitAbortController = null;
+
+        if (ctx.cancelled || ctx.error) return;
+        if (ctx.result) replaceLineWithResponse(ctx.result);
+    };
 
     if (trimmed.startsWith("/p ")) {
 
@@ -653,61 +686,14 @@ Here is the full editor content for context (line numbers are prefixed as "N> ")
 ${numberedContext}
 \`\`\``;
 
-        waitAbortController = new AbortController();
-        showWaitingUI();
-
-        await yieldFrame();
-
-        const response = await sendMessage(contextualPrompt);
-
-        hideWaitingUI();
-        waitAbortController = null;
-
-        if (response) {
-
-            const indented = applyIndent(response, indent);
-
-            ta.value =
-                text.substring(0, start) +
-                indented +
-                text.substring(lineEnd);
-
-            ta.dispatchEvent(new Event("input"));
-            localStorage.setItem("tm_editor_content",
-                windowMode === "maximized" ? mergeColumnContent() : textarea.value);
-        }
-
+        submitMessage(contextualPrompt, onstart, onend);
         return;
     }
 
     if (trimmed.startsWith("/r ")) {
 
         const prompt = trimmed.substring(3);
-
-        waitAbortController = new AbortController();
-        showWaitingUI();
-
-        await yieldFrame();
-
-        const response = await sendMessage(prompt);
-
-        hideWaitingUI();
-        waitAbortController = null;
-
-        if (response) {
-
-            const indented = applyIndent(response, indent);
-
-            ta.value =
-                text.substring(0, start) +
-                indented +
-                text.substring(lineEnd);
-
-            ta.dispatchEvent(new Event("input"));
-            localStorage.setItem("tm_editor_content",
-                windowMode === "maximized" ? mergeColumnContent() : textarea.value);
-        }
-
+        submitMessage(prompt, onstart, onend);
         return;
     }
 
@@ -749,10 +735,7 @@ let asciiTA;
 let asciiCache = { hash: null, content: "" };
 const ASCII_CACHE_KEY = "tm_ascii_cache";
 
-async function generateAsciiDiagram(code, hash) {
-
-    waitAbortController = new AbortController();
-    showWaitingUI();
+function generateAsciiDiagram(code, hash) {
 
     const prompt = "Analyze the following code and create an ASCII box diagram showing its architecture, " +
         "main components, and their relationships. Use simple ASCII box drawing characters " +
@@ -760,24 +743,33 @@ async function generateAsciiDiagram(code, hash) {
         "diagram, no explanations enclosed inside triple quotes pair : \"```md and ```\", denoting code." +
         "\n\nCode:\n" + code;
 
-    try {
-        const response = await sendMessage(prompt);
+    const onstart = (ctx) => {
+        waitAbortController = new AbortController();
+        showWaitingUI();
+    };
 
-        if (waitAbortController && waitAbortController.signal.aborted) return;
+    const onend = (ctx) => {
+        const wasAborted = waitAbortController && waitAbortController.signal.aborted;
+        waitAbortController = null;
+        hideWaitingUI();
 
-        if (response) {
-            asciiCache = { hash: hash, content: response };
+        if (wasAborted || ctx.cancelled) return;
+
+        if (ctx.error) {
+            if (activeTab === "ascii") asciiTA.value = "(Error generating ASCII diagram: " + ctx.error.message + ")";
+            return;
+        }
+
+        if (ctx.result) {
+            asciiCache = { hash: hash, content: ctx.result };
             try { localStorage.setItem(ASCII_CACHE_KEY, JSON.stringify(asciiCache)); } catch (e) {}
-            if (activeTab === "ascii") asciiTA.value = response;
+            if (activeTab === "ascii") asciiTA.value = ctx.result;
         } else {
             if (activeTab === "ascii") asciiTA.value = "(Failed to generate ASCII diagram)";
         }
-    } catch (e) {
-        if (activeTab === "ascii") asciiTA.value = "(Error generating ASCII diagram: " + e.message + ")";
-    } finally {
-        waitAbortController = null;
-        hideWaitingUI();
-    }
+    };
+
+    submitMessage(prompt, onstart, onend);
 }
 
 // ===== src/component_tab_question.js =====
@@ -791,10 +783,7 @@ let questionTA;
 let questionCache = { hash: null, content: "" };
 const QUESTION_CACHE_KEY = "tm_question_cache";
 
-async function generateQuestion(code, hash) {
-
-    waitAbortController = new AbortController();
-    showWaitingUI();
+function generateQuestion(code, hash) {
 
     const prompt = "Analyze the following code (it may be partial/half-written) and figure out what problem it is solving. " +
         "If it is a LeetCode problem, identify the question number and title. Follow this EXACT format:\n\n" +
@@ -813,24 +802,33 @@ async function generateQuestion(code, hash) {
         "Enclose your ENTIRE response inside ```md and ``` so it is treated as markdown code.\n\n" +
         "Code:\n" + code;
 
-    try {
-        const response = await sendMessage(prompt);
+    const onstart = (ctx) => {
+        waitAbortController = new AbortController();
+        showWaitingUI();
+    };
 
-        if (waitAbortController && waitAbortController.signal.aborted) return;
+    const onend = (ctx) => {
+        const wasAborted = waitAbortController && waitAbortController.signal.aborted;
+        waitAbortController = null;
+        hideWaitingUI();
 
-        if (response) {
-            questionCache = { hash: hash, content: response };
+        if (wasAborted || ctx.cancelled) return;
+
+        if (ctx.error) {
+            if (activeTab === "question") questionTA.value = "(Error generating question: " + ctx.error.message + ")";
+            return;
+        }
+
+        if (ctx.result) {
+            questionCache = { hash: hash, content: ctx.result };
             try { localStorage.setItem(QUESTION_CACHE_KEY, JSON.stringify(questionCache)); } catch (e) {}
-            if (activeTab === "question") questionTA.value = response;
+            if (activeTab === "question") questionTA.value = ctx.result;
         } else {
             if (activeTab === "question") questionTA.value = "(Failed to generate question)";
         }
-    } catch (e) {
-        if (activeTab === "question") questionTA.value = "(Error generating question: " + e.message + ")";
-    } finally {
-        waitAbortController = null;
-        hideWaitingUI();
-    }
+    };
+
+    submitMessage(prompt, onstart, onend);
 }
 
 // ===== src/component_tab_snippets.js =====
@@ -844,10 +842,7 @@ let snippetsTA;
 let snippetsCache = { hash: null, content: "" };
 const SNIPPETS_CACHE_KEY = "tm_snippets_cache";
 
-async function generateSnippets(code, hash) {
-
-    waitAbortController = new AbortController();
-    showWaitingUI();
+function generateSnippets(code, hash) {
 
     const prompt = "Analyze the following code and understand what problem it is solving. " +
         "Then provide reusable, well-known algorithm and utility functions that would help solve this problem. " +
@@ -871,24 +866,33 @@ async function generateSnippets(code, hash) {
         "- Enclose your ENTIRE response inside ```md and ``` so it is treated as code\n\n" +
         "Code:\n" + code;
 
-    try {
-        const response = await sendMessage(prompt);
+    const onstart = (ctx) => {
+        waitAbortController = new AbortController();
+        showWaitingUI();
+    };
 
-        if (waitAbortController && waitAbortController.signal.aborted) return;
+    const onend = (ctx) => {
+        const wasAborted = waitAbortController && waitAbortController.signal.aborted;
+        waitAbortController = null;
+        hideWaitingUI();
 
-        if (response) {
-            snippetsCache = { hash: hash, content: response };
+        if (wasAborted || ctx.cancelled) return;
+
+        if (ctx.error) {
+            if (activeTab === "snippets") snippetsTA.value = "(Error generating snippets: " + ctx.error.message + ")";
+            return;
+        }
+
+        if (ctx.result) {
+            snippetsCache = { hash: hash, content: ctx.result };
             try { localStorage.setItem(SNIPPETS_CACHE_KEY, JSON.stringify(snippetsCache)); } catch (e) {}
-            if (activeTab === "snippets") snippetsTA.value = response;
+            if (activeTab === "snippets") snippetsTA.value = ctx.result;
         } else {
             if (activeTab === "snippets") snippetsTA.value = "(Failed to generate snippets)";
         }
-    } catch (e) {
-        if (activeTab === "snippets") snippetsTA.value = "(Error generating snippets: " + e.message + ")";
-    } finally {
-        waitAbortController = null;
-        hideWaitingUI();
-    }
+    };
+
+    submitMessage(prompt, onstart, onend);
 }
 
 // ===== src/component_tab_spreview.js =====
@@ -915,10 +919,7 @@ function setSpreviewContent(html) {
     spreviewFrame.srcdoc = html;
 }
 
-async function generateSpreview(code, hash) {
-
-    waitAbortController = new AbortController();
-    showWaitingUI();
+function generateSpreview(code, hash) {
 
     const prompt = "Take the following source code and produce a single, self-contained HTML document that displays it " +
         "with advanced, IDE-quality syntax highlighting. Requirements:\n\n" +
@@ -962,13 +963,25 @@ async function generateSpreview(code, hash) {
         "9. Respond ONLY with the complete HTML document, nothing else — no explanations, no markdown fences\n\n" +
         "Code:\n" + code;
 
-    try {
-        const response = await sendMessage(prompt);
+    const onstart = (ctx) => {
+        waitAbortController = new AbortController();
+        showWaitingUI();
+    };
 
-        if (waitAbortController && waitAbortController.signal.aborted) return;
+    const onend = (ctx) => {
+        const wasAborted = waitAbortController && waitAbortController.signal.aborted;
+        waitAbortController = null;
+        hideWaitingUI();
 
-        if (response) {
-            let html = response
+        if (wasAborted || ctx.cancelled) return;
+
+        if (ctx.error) {
+            if (activeTab === "spreview") setSpreviewContent("<p style='font-family:monospace;padding:20px;color:red'>(Error: " + ctx.error.message + ")</p>");
+            return;
+        }
+
+        if (ctx.result) {
+            let html = ctx.result
                 .replace(/^```html?\n?/i, "")
                 .replace(/```\s*$/, "")
                 .trim();
@@ -981,12 +994,9 @@ async function generateSpreview(code, hash) {
         } else {
             if (activeTab === "spreview") setSpreviewContent("<p style='font-family:monospace;padding:20px;color:red'>(Failed to generate preview)</p>");
         }
-    } catch (e) {
-        if (activeTab === "spreview") setSpreviewContent("<p style='font-family:monospace;padding:20px;color:red'>(Error: " + e.message + ")</p>");
-    } finally {
-        waitAbortController = null;
-        hideWaitingUI();
-    }
+    };
+
+    submitMessage(prompt, onstart, onend);
 }
 
 // ===== src/component_tabbar.js =====
@@ -1115,8 +1125,6 @@ function switchTab(tabName) {
     updateTabStyles();
 
     if (tabName === "editor") {
-
-        if (waitAbortController) waitAbortController.abort();
 
         asciiTA.style.display = "none";
         questionTA.style.display = "none";
@@ -1271,6 +1279,7 @@ function showWaitingUI() {
 
     cancelBtn.onclick = (e) => {
         e.stopPropagation();
+        if (typeof flushLlmQueue === "function") flushLlmQueue();
         if (waitAbortController) waitAbortController.abort();
     };
 
@@ -2399,11 +2408,107 @@ async function sendMessage_chatgpt(prompt) {
     return await waitForAssistantResponse_llm(previousCount);
 }
 
+async function sendMessage(prompt) {
+    return await sendMessage_chatgpt(prompt);
+}
+
 // -----------------------------------------------------------------------------
 // Public entry point.
 // -----------------------------------------------------------------------------
-async function sendMessage(prompt) {
-    return await sendMessage_chatgpt(prompt);
+
+// -----------------------------------------------------------------------------
+// Queued public entry point.
+//
+// submitMessage(prompt, onstart, onend) enqueues a prompt for sequential
+// processing. Only one job runs at a time — additional submissions wait their
+// turn in FIFO order.
+//
+//   onstart(ctx)  is invoked just before the prompt is dispatched to ChatGPT.
+//   onend(ctx)    is invoked after the response arrives (success or error).
+//
+// `ctx` is an object: { prompt, result, error, cancelled }.
+//   - On `onstart`, only `prompt` is meaningful.
+//   - On `onend`, `result` is the cleaned response text (or null on
+//     failure/cancel), `error` is the thrown error if any, and `cancelled`
+//     is true if `waitAbortController` aborted the wait.
+//
+// Returns a Promise that resolves with the same `ctx` passed to `onend`, so
+// callers may either use callbacks, await the promise, or both.
+// -----------------------------------------------------------------------------
+
+const _llm_queue = [];
+let _llm_processing = false;
+
+function submitMessage(prompt, onstart, onend) {
+
+    return new Promise(resolve => {
+
+        _llm_queue.push({ prompt, onstart, onend, resolve });
+        _llm_drain_queue();
+    });
+}
+
+async function _llm_drain_queue() {
+
+    if (_llm_processing) return;
+    if (_llm_queue.length === 0) return;
+
+    _llm_processing = true;
+
+    while (_llm_queue.length > 0) {
+
+        const job = _llm_queue.shift();
+        const ctx = { prompt: job.prompt, result: null, error: null, cancelled: false };
+
+        try {
+            if (typeof job.onstart === "function") {
+                try { job.onstart(ctx); }
+                catch (e) { console.error("submitMessage onstart threw:", e); }
+            }
+
+            const result = await sendMessage(job.prompt);
+
+            ctx.result = result;
+            if (result === null) ctx.cancelled = true;
+
+        } catch (err) {
+            ctx.error = err;
+            console.error("submitMessage job failed:", err);
+        }
+
+        if (typeof job.onend === "function") {
+            try { job.onend(ctx); }
+            catch (e) { console.error("submitMessage onend threw:", e); }
+        }
+
+        try { job.resolve(ctx); } catch (_) { }
+    }
+
+    _llm_processing = false;
+}
+
+// -----------------------------------------------------------------------------
+// flushLlmQueue() — drop all PENDING submitMessage jobs (does not touch the
+// currently-running one; that is interrupted via the existing
+// `waitAbortController` path the running job already listens to).
+// Each dropped job receives an `onend({ cancelled: true })` so its caller can
+// tear down UI state, then its promise resolves.
+// -----------------------------------------------------------------------------
+function flushLlmQueue() {
+
+    const pending = _llm_queue.splice(0, _llm_queue.length);
+
+    pending.forEach(job => {
+
+        const ctx = { prompt: job.prompt, result: null, error: null, cancelled: true };
+
+        if (typeof job.onend === "function") {
+            try { job.onend(ctx); }
+            catch (e) { console.error("flushLlmQueue onend threw:", e); }
+        }
+
+        try { job.resolve(ctx); } catch (_) { }
+    });
 }
 
 // ===== src/service_undoredo.js =====

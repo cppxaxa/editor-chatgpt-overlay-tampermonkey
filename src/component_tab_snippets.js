@@ -8,10 +8,7 @@ let snippetsTA;
 let snippetsCache = { hash: null, content: "" };
 const SNIPPETS_CACHE_KEY = "tm_snippets_cache";
 
-async function generateSnippets(code, hash) {
-
-    waitAbortController = new AbortController();
-    showWaitingUI();
+function generateSnippets(code, hash) {
 
     const prompt = "Analyze the following code and understand what problem it is solving. " +
         "Then provide reusable, well-known algorithm and utility functions that would help solve this problem. " +
@@ -35,22 +32,31 @@ async function generateSnippets(code, hash) {
         "- Enclose your ENTIRE response inside ```md and ``` so it is treated as code\n\n" +
         "Code:\n" + code;
 
-    try {
-        const response = await sendMessage(prompt);
+    const onstart = (ctx) => {
+        waitAbortController = new AbortController();
+        showWaitingUI();
+    };
 
-        if (waitAbortController && waitAbortController.signal.aborted) return;
+    const onend = (ctx) => {
+        const wasAborted = waitAbortController && waitAbortController.signal.aborted;
+        waitAbortController = null;
+        hideWaitingUI();
 
-        if (response) {
-            snippetsCache = { hash: hash, content: response };
+        if (wasAborted || ctx.cancelled) return;
+
+        if (ctx.error) {
+            if (activeTab === "snippets") snippetsTA.value = "(Error generating snippets: " + ctx.error.message + ")";
+            return;
+        }
+
+        if (ctx.result) {
+            snippetsCache = { hash: hash, content: ctx.result };
             try { localStorage.setItem(SNIPPETS_CACHE_KEY, JSON.stringify(snippetsCache)); } catch (e) {}
-            if (activeTab === "snippets") snippetsTA.value = response;
+            if (activeTab === "snippets") snippetsTA.value = ctx.result;
         } else {
             if (activeTab === "snippets") snippetsTA.value = "(Failed to generate snippets)";
         }
-    } catch (e) {
-        if (activeTab === "snippets") snippetsTA.value = "(Error generating snippets: " + e.message + ")";
-    } finally {
-        waitAbortController = null;
-        hideWaitingUI();
-    }
+    };
+
+    submitMessage(prompt, onstart, onend);
 }

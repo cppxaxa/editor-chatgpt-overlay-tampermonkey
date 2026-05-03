@@ -8,10 +8,7 @@ let asciiTA;
 let asciiCache = { hash: null, content: "" };
 const ASCII_CACHE_KEY = "tm_ascii_cache";
 
-async function generateAsciiDiagram(code, hash) {
-
-    waitAbortController = new AbortController();
-    showWaitingUI();
+function generateAsciiDiagram(code, hash) {
 
     const prompt = "Analyze the following code and create an ASCII box diagram showing its architecture, " +
         "main components, and their relationships. Use simple ASCII box drawing characters " +
@@ -19,22 +16,31 @@ async function generateAsciiDiagram(code, hash) {
         "diagram, no explanations enclosed inside triple quotes pair : \"```md and ```\", denoting code." +
         "\n\nCode:\n" + code;
 
-    try {
-        const response = await sendMessage(prompt);
+    const onstart = (ctx) => {
+        waitAbortController = new AbortController();
+        showWaitingUI();
+    };
 
-        if (waitAbortController && waitAbortController.signal.aborted) return;
+    const onend = (ctx) => {
+        const wasAborted = waitAbortController && waitAbortController.signal.aborted;
+        waitAbortController = null;
+        hideWaitingUI();
 
-        if (response) {
-            asciiCache = { hash: hash, content: response };
+        if (wasAborted || ctx.cancelled) return;
+
+        if (ctx.error) {
+            if (activeTab === "ascii") asciiTA.value = "(Error generating ASCII diagram: " + ctx.error.message + ")";
+            return;
+        }
+
+        if (ctx.result) {
+            asciiCache = { hash: hash, content: ctx.result };
             try { localStorage.setItem(ASCII_CACHE_KEY, JSON.stringify(asciiCache)); } catch (e) {}
-            if (activeTab === "ascii") asciiTA.value = response;
+            if (activeTab === "ascii") asciiTA.value = ctx.result;
         } else {
             if (activeTab === "ascii") asciiTA.value = "(Failed to generate ASCII diagram)";
         }
-    } catch (e) {
-        if (activeTab === "ascii") asciiTA.value = "(Error generating ASCII diagram: " + e.message + ")";
-    } finally {
-        waitAbortController = null;
-        hideWaitingUI();
-    }
+    };
+
+    submitMessage(prompt, onstart, onend);
 }

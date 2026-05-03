@@ -20,7 +20,7 @@ function applyIndent(response, indent) {
     }).join("\n");
 }
 
-async function handleLineAction() {
+function handleLineAction() {
 
     if (!textarea) return;
 
@@ -42,6 +42,33 @@ async function handleLineAction() {
 
     const indent = line.match(/^[ ]*/)[0];
     const trimmed = line.trimStart();
+
+    const replaceLineWithResponse = (response) => {
+
+        const indented = applyIndent(response, indent);
+
+        ta.value =
+            text.substring(0, start) +
+            indented +
+            text.substring(lineEnd);
+
+        ta.dispatchEvent(new Event("input"));
+        localStorage.setItem("tm_editor_content",
+            windowMode === "maximized" ? mergeColumnContent() : textarea.value);
+    };
+
+    const onstart = (ctx) => {
+        waitAbortController = new AbortController();
+        showWaitingUI();
+    };
+
+    const onend = (ctx) => {
+        hideWaitingUI();
+        waitAbortController = null;
+
+        if (ctx.cancelled || ctx.error) return;
+        if (ctx.result) replaceLineWithResponse(ctx.result);
+    };
 
     if (trimmed.startsWith("/p ")) {
 
@@ -78,61 +105,14 @@ Here is the full editor content for context (line numbers are prefixed as "N> ")
 ${numberedContext}
 \`\`\``;
 
-        waitAbortController = new AbortController();
-        showWaitingUI();
-
-        await yieldFrame();
-
-        const response = await sendMessage(contextualPrompt);
-
-        hideWaitingUI();
-        waitAbortController = null;
-
-        if (response) {
-
-            const indented = applyIndent(response, indent);
-
-            ta.value =
-                text.substring(0, start) +
-                indented +
-                text.substring(lineEnd);
-
-            ta.dispatchEvent(new Event("input"));
-            localStorage.setItem("tm_editor_content",
-                windowMode === "maximized" ? mergeColumnContent() : textarea.value);
-        }
-
+        submitMessage(contextualPrompt, onstart, onend);
         return;
     }
 
     if (trimmed.startsWith("/r ")) {
 
         const prompt = trimmed.substring(3);
-
-        waitAbortController = new AbortController();
-        showWaitingUI();
-
-        await yieldFrame();
-
-        const response = await sendMessage(prompt);
-
-        hideWaitingUI();
-        waitAbortController = null;
-
-        if (response) {
-
-            const indented = applyIndent(response, indent);
-
-            ta.value =
-                text.substring(0, start) +
-                indented +
-                text.substring(lineEnd);
-
-            ta.dispatchEvent(new Event("input"));
-            localStorage.setItem("tm_editor_content",
-                windowMode === "maximized" ? mergeColumnContent() : textarea.value);
-        }
-
+        submitMessage(prompt, onstart, onend);
         return;
     }
 

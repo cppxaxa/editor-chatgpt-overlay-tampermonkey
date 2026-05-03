@@ -97,7 +97,7 @@ function clearAllMarkers(ta) {
     ta.dispatchEvent(new Event("input"));
 }
 
-async function handleCodeCheck() {
+function handleCodeCheck() {
 
     if (!textarea) return;
 
@@ -143,70 +143,76 @@ async function handleCodeCheck() {
     }
 
     waitAbortController = new AbortController();
-    showWaitingUI();
-
-    await yieldFrame();
 
     const numberedCode = code.split("\n").map((line, i) => (i + 1) + "> " + line).join("\n");
 
-    const response = await sendMessage(CODE_CHECK_PROMPT + numberedCode + "\n```");
+    const onstart = (ctx) => {
+        showWaitingUI();
+    };
 
-    hideWaitingUI();
-    waitAbortController = null;
+    const onend = (ctx) => {
+        hideWaitingUI();
+        waitAbortController = null;
 
-    if (!response) return;
+        if (ctx.cancelled || ctx.error) return;
 
-    let parsed = null;
+        const response = ctx.result;
+        if (!response) return;
 
-    try {
+        let parsed = null;
 
-        const cleaned = response
-            .replace(/^```[\w]*\n?/gm, "")
-            .replace(/```\s*$/gm, "")
-            .trim();
+        try {
 
-        parsed = JSON.parse(cleaned);
+            const cleaned = response
+                .replace(/^```[\w]*\n?/gm, "")
+                .replace(/```\s*$/gm, "")
+                .trim();
 
-    } catch (e) {
+            parsed = JSON.parse(cleaned);
 
-        showResultDialog("Code Check — Raw Response", response);
-        return;
-    }
+        } catch (e) {
 
-    const correct = parsed.correct ? "✅ Yes" : "❌ No";
-    const solves = parsed.solves_problem ? "✅ Yes" : "❌ No";
-
-    const issueList = parsed.issues && parsed.issues.length
-        ? parsed.issues.map((s, i) => "  " + (i + 1) + ". " + s).join("\n")
-        : "  None";
-
-    const suggestionList = parsed.suggestions && parsed.suggestions.length
-        ? parsed.suggestions.map((s, i) => "  " + (i + 1) + ". " + s).join("\n")
-        : "  None";
-
-    const body =
-        "Correct: " + correct + "\n" +
-        "Solves the problem: " + solves + "\n\n" +
-        "Summary:\n  " + parsed.summary + "\n\n" +
-        "Issues:\n" + issueList + "\n\n" +
-        "Suggestions:\n" + suggestionList;
-
-    checkCache = { hash: hash, parsed: parsed, body: body };
-
-    showResultDialog("Code Check Result", body);
-
-    if (parsed.markers && parsed.markers.length) {
-
-        if (windowMode === "maximized") {
-            textarea.value = mergeColumnContent();
-            insertMarkers(textarea, parsed.markers);
-            const lines = textarea.value.split("\n");
-            const lpc = getLinesPerCol();
-            leftTA.value = lines.slice(0, lpc).join("\n");
-            rightTA.value = lines.slice(lpc).join("\n");
-            saveMergedContent();
-        } else {
-            insertMarkers(textarea, parsed.markers);
+            showResultDialog("Code Check — Raw Response", response);
+            return;
         }
-    }
+
+        const correct = parsed.correct ? "✅ Yes" : "❌ No";
+        const solves = parsed.solves_problem ? "✅ Yes" : "❌ No";
+
+        const issueList = parsed.issues && parsed.issues.length
+            ? parsed.issues.map((s, i) => "  " + (i + 1) + ". " + s).join("\n")
+            : "  None";
+
+        const suggestionList = parsed.suggestions && parsed.suggestions.length
+            ? parsed.suggestions.map((s, i) => "  " + (i + 1) + ". " + s).join("\n")
+            : "  None";
+
+        const body =
+            "Correct: " + correct + "\n" +
+            "Solves the problem: " + solves + "\n\n" +
+            "Summary:\n  " + parsed.summary + "\n\n" +
+            "Issues:\n" + issueList + "\n\n" +
+            "Suggestions:\n" + suggestionList;
+
+        checkCache = { hash: hash, parsed: parsed, body: body };
+
+        showResultDialog("Code Check Result", body);
+
+        if (parsed.markers && parsed.markers.length) {
+
+            if (windowMode === "maximized") {
+                textarea.value = mergeColumnContent();
+                insertMarkers(textarea, parsed.markers);
+                const lines = textarea.value.split("\n");
+                const lpc = getLinesPerCol();
+                leftTA.value = lines.slice(0, lpc).join("\n");
+                rightTA.value = lines.slice(lpc).join("\n");
+                saveMergedContent();
+            } else {
+                insertMarkers(textarea, parsed.markers);
+            }
+        }
+    };
+
+    submitMessage(CODE_CHECK_PROMPT + numberedCode + "\n```", onstart, onend);
 }

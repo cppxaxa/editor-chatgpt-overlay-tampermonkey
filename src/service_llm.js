@@ -245,9 +245,105 @@ async function sendMessage_chatgpt(prompt) {
     return await waitForAssistantResponse_llm(previousCount);
 }
 
+async function sendMessage(prompt) {
+    return await sendMessage_chatgpt(prompt);
+}
+
 // -----------------------------------------------------------------------------
 // Public entry point.
 // -----------------------------------------------------------------------------
-async function sendMessage(prompt) {
-    return await sendMessage_chatgpt(prompt);
+
+// -----------------------------------------------------------------------------
+// Queued public entry point.
+//
+// submitMessage(prompt, onstart, onend) enqueues a prompt for sequential
+// processing. Only one job runs at a time — additional submissions wait their
+// turn in FIFO order.
+//
+//   onstart(ctx)  is invoked just before the prompt is dispatched to ChatGPT.
+//   onend(ctx)    is invoked after the response arrives (success or error).
+//
+// `ctx` is an object: { prompt, result, error, cancelled }.
+//   - On `onstart`, only `prompt` is meaningful.
+//   - On `onend`, `result` is the cleaned response text (or null on
+//     failure/cancel), `error` is the thrown error if any, and `cancelled`
+//     is true if `waitAbortController` aborted the wait.
+//
+// Returns a Promise that resolves with the same `ctx` passed to `onend`, so
+// callers may either use callbacks, await the promise, or both.
+// -----------------------------------------------------------------------------
+
+const _llm_queue = [];
+let _llm_processing = false;
+
+function submitMessage(prompt, onstart, onend) {
+
+    return new Promise(resolve => {
+
+        _llm_queue.push({ prompt, onstart, onend, resolve });
+        _llm_drain_queue();
+    });
+}
+
+async function _llm_drain_queue() {
+
+    if (_llm_processing) return;
+    if (_llm_queue.length === 0) return;
+
+    _llm_processing = true;
+
+    while (_llm_queue.length > 0) {
+
+        const job = _llm_queue.shift();
+        const ctx = { prompt: job.prompt, result: null, error: null, cancelled: false };
+
+        try {
+            if (typeof job.onstart === "function") {
+                try { job.onstart(ctx); }
+                catch (e) { console.error("submitMessage onstart threw:", e); }
+            }
+
+            const result = await sendMessage(job.prompt);
+
+            ctx.result = result;
+            if (result === null) ctx.cancelled = true;
+
+        } catch (err) {
+            ctx.error = err;
+            console.error("submitMessage job failed:", err);
+        }
+
+        if (typeof job.onend === "function") {
+            try { job.onend(ctx); }
+            catch (e) { console.error("submitMessage onend threw:", e); }
+        }
+
+        try { job.resolve(ctx); } catch (_) { }
+    }
+
+    _llm_processing = false;
+}
+
+// -----------------------------------------------------------------------------
+// flushLlmQueue() — drop all PENDING submitMessage jobs (does not touch the
+// currently-running one; that is interrupted via the existing
+// `waitAbortController` path the running job already listens to).
+// Each dropped job receives an `onend({ cancelled: true })` so its caller can
+// tear down UI state, then its promise resolves.
+// -----------------------------------------------------------------------------
+function flushLlmQueue() {
+
+    const pending = _llm_queue.splice(0, _llm_queue.length);
+
+    pending.forEach(job => {
+
+        const ctx = { prompt: job.prompt, result: null, error: null, cancelled: true };
+
+        if (typeof job.onend === "function") {
+            try { job.onend(ctx); }
+            catch (e) { console.error("flushLlmQueue onend threw:", e); }
+        }
+
+        try { job.resolve(ctx); } catch (_) { }
+    });
 }
