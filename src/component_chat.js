@@ -152,6 +152,29 @@ function _chat_do_send() {
                 _chat_append_message("System", "Error: " + ctx.error);
             } else {
                 _chat_append_message("Assistant", ctx.result || "(empty response)");
+
+                /* If the chat window isn't actively visible to the user
+                   (closed, hidden, or minimized to the taskbar), surface
+                   the response as a toast notification. The first 60 chars
+                   of the result preview the body; full text is recorded in
+                   the toast history pane. */
+                const chatVisible =
+                    chatServiceWindow &&
+                    chatServiceWindow.visible &&
+                    chatServiceWindow.mode !== "minimized";
+
+                if (!chatVisible && typeof service_toast_show === "function") {
+                    const raw = (ctx.result || "").trim();
+                    const preview = raw.length > 60
+                        ? raw.slice(0, 60) + "…"
+                        : (raw || "(empty response)");
+                    service_toast_show(preview, {
+                        title:    "LLM",
+                        icon:     "💬",
+                        duration: 3000,
+                        location: "bottom-right"
+                    });
+                }
             }
 
             _chat_input.focus();

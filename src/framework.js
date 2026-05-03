@@ -48,6 +48,7 @@ function framework_on_init() {
     component_calc_handle_init();
     component_chat_handle_init();
     component_localstorage_handle_init();
+    service_toast_handle_init();
 }
 
 function framework_init() {
