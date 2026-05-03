@@ -117,6 +117,10 @@ ${numberedContext}
     alert(line + "\n\n— Tip: /r {prompt} = raw prompt | /p {prompt} = prompt with context\n— Tabs: Alt+1 Editor | Alt+2 Ascii | Alt+3 Question | Alt+4 Snippets | Alt+5 S-Preview\n— Alt+I = Execute command | Alt+C = Code check | Alt+R = Regenerate tab\n— More: github.com/cppxaxa/editor-chatgpt-overlay-tampermonkey");
 }
 
+function component_linecommand_handle_init() {
+    registerLineReaderHotkey();
+}
+
 function registerLineReaderHotkey() {
 
     document.addEventListener("keydown", (e) => {

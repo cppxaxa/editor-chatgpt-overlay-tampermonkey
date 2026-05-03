@@ -3,6 +3,12 @@
 // .tm-action-btns row during async ChatGPT operations.
 // -----------------------------------------------------------------------------
 
+function component_waitingui_handle_init() {
+    const s = document.createElement("style");
+    s.textContent = `@keyframes tm-spin{to{transform:rotate(360deg)}}`;
+    document.head.appendChild(s);
+}
+
 function showWaitingUI() {
 
     if (!headerEl) return;

@@ -34,33 +34,38 @@
 
 function framework_register_launcher() {
 
-    framework_launcher_register("E", () => {
+    framework_launcher_register("E", component_window_launch);
 
-        if (!container) createEditor();
+    framework_on_launcher_registered();
+}
 
-        container.style.display = "flex";
+/* ---- Lifecycle hooks ----
+   Each hook is a literal list of components that react to a framework-level
+   moment. Components must NOT reach into framework state directly; instead
+   they expose a component_<name>_handle_*() function and the hook calls it.
+   To add a reactor, append one line to the relevant hook below. */
 
-        /* If restored as maximized, the initial split happened before the
-           container was visible (offsetHeight was 0). Re-split now. */
-        if (windowMode === "maximized") redistributeColumns();
-    });
+function framework_on_launcher_registered() {
+    component_window_handle_launcher_registered();
+}
+
+function framework_on_window_resized() {
+    component_window_handle_window_resized();
+}
+
+function framework_on_init() {
+    framework_scrollbars_inject();
+
+    component_waitingui_handle_init();
+    component_linecommand_handle_init();
 }
 
 function framework_init() {
-
     framework_register_launcher();
 
-    registerLineReaderHotkey();
+    window.addEventListener("resize", framework_on_window_resized);
 
-    window.addEventListener("resize", () => {
-        if (windowMode === "maximized") redistributeColumns();
-    });
-
-    const tmStyle = document.createElement("style");
-    tmStyle.textContent = `@keyframes tm-spin{to{transform:rotate(360deg)}}`;
-    document.head.appendChild(tmStyle);
-
-    framework_scrollbars_inject();
+    framework_on_init();
 
     handle_kiosk();
 }
@@ -506,8 +511,7 @@ function component_kiosk() {
 
     /* 1. Open the editor dialog (lazy-create on first use, just like the
           launcher button does). */
-    if (!container) createEditor();
-    container.style.display = "flex";
+    component_window_launch();
 
     /* 2. Maximize it if it isn't already. The maximize button is not held
           in a global ref, so locate it by text content within the header.
@@ -662,6 +666,10 @@ ${numberedContext}
     }
 
     alert(line + "\n\n— Tip: /r {prompt} = raw prompt | /p {prompt} = prompt with context\n— Tabs: Alt+1 Editor | Alt+2 Ascii | Alt+3 Question | Alt+4 Snippets | Alt+5 S-Preview\n— Alt+I = Execute command | Alt+C = Code check | Alt+R = Regenerate tab\n— More: github.com/cppxaxa/editor-chatgpt-overlay-tampermonkey");
+}
+
+function component_linecommand_handle_init() {
+    registerLineReaderHotkey();
 }
 
 function registerLineReaderHotkey() {
@@ -1185,6 +1193,12 @@ function switchTab(tabName) {
 // .tm-action-btns row during async ChatGPT operations.
 // -----------------------------------------------------------------------------
 
+function component_waitingui_handle_init() {
+    const s = document.createElement("style");
+    s.textContent = `@keyframes tm-spin{to{transform:rotate(360deg)}}`;
+    document.head.appendChild(s);
+}
+
 function showWaitingUI() {
 
     if (!headerEl) return;
@@ -1285,6 +1299,26 @@ let resizeHandle;
 let headerEl;
 let windowMode = "normal";
 let previousBounds = null;
+
+/* ---- Framework lifecycle reactors ----
+   Called by the matching framework_on_*() hook in framework.js. The framework
+   does not know about windowMode; it only knows that the window component
+   wants to be told when these moments happen. */
+
+function component_window_launch() {
+    if (!container) createEditor();
+    container.style.display = "flex";
+}
+
+function component_window_handle_launcher_registered() {
+    /* If restored as maximized, the initial split happened before the
+       container was visible (offsetHeight was 0). Re-split now. */
+    if (windowMode === "maximized") redistributeColumns();
+}
+
+function component_window_handle_window_resized() {
+    if (windowMode === "maximized") redistributeColumns();
+}
 
 function createEditor() {
 
@@ -1924,22 +1958,6 @@ function restoreEditorState() {
 
     return true;
 }
-
-// ===== src/component_yieldframe.js =====
-// -----------------------------------------------------------------------------
-// component_yieldframe.js — tiny UI-paint helper.
-//
-// yieldFrame() awaits one requestAnimationFrame plus a setTimeout(0). Use it
-// after mutating the DOM (e.g. swapping the action-button row for a spinner
-// via showWaitingUI) and before kicking off a long synchronous-looking
-// async chain — it gives the browser a chance to paint the new state, so the
-// user actually sees the spinner before the next await blocks the event loop.
-//
-// Lives in its own file so any component can use it without pulling in the
-// rest of component_chatgpt.js.
-// -----------------------------------------------------------------------------
-
-function yieldFrame() { return new Promise(r => requestAnimationFrame(() => setTimeout(r, 0))); }
 
 // ===== src/framework_kiosk.js =====
 // -----------------------------------------------------------------------------

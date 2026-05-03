@@ -17,6 +17,26 @@ let headerEl;
 let windowMode = "normal";
 let previousBounds = null;
 
+/* ---- Framework lifecycle reactors ----
+   Called by the matching framework_on_*() hook in framework.js. The framework
+   does not know about windowMode; it only knows that the window component
+   wants to be told when these moments happen. */
+
+function component_window_launch() {
+    if (!container) createEditor();
+    container.style.display = "flex";
+}
+
+function component_window_handle_launcher_registered() {
+    /* If restored as maximized, the initial split happened before the
+       container was visible (offsetHeight was 0). Re-split now. */
+    if (windowMode === "maximized") redistributeColumns();
+}
+
+function component_window_handle_window_resized() {
+    if (windowMode === "maximized") redistributeColumns();
+}
+
 function createEditor() {
 
     container = document.createElement("div");

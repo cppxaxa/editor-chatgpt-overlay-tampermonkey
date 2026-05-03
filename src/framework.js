@@ -9,33 +9,38 @@
 
 function framework_register_launcher() {
 
-    framework_launcher_register("E", () => {
+    framework_launcher_register("E", component_window_launch);
 
-        if (!container) createEditor();
+    framework_on_launcher_registered();
+}
 
-        container.style.display = "flex";
+/* ---- Lifecycle hooks ----
+   Each hook is a literal list of components that react to a framework-level
+   moment. Components must NOT reach into framework state directly; instead
+   they expose a component_<name>_handle_*() function and the hook calls it.
+   To add a reactor, append one line to the relevant hook below. */
 
-        /* If restored as maximized, the initial split happened before the
-           container was visible (offsetHeight was 0). Re-split now. */
-        if (windowMode === "maximized") redistributeColumns();
-    });
+function framework_on_launcher_registered() {
+    component_window_handle_launcher_registered();
+}
+
+function framework_on_window_resized() {
+    component_window_handle_window_resized();
+}
+
+function framework_on_init() {
+    framework_scrollbars_inject();
+
+    component_waitingui_handle_init();
+    component_linecommand_handle_init();
 }
 
 function framework_init() {
-
     framework_register_launcher();
 
-    registerLineReaderHotkey();
+    window.addEventListener("resize", framework_on_window_resized);
 
-    window.addEventListener("resize", () => {
-        if (windowMode === "maximized") redistributeColumns();
-    });
-
-    const tmStyle = document.createElement("style");
-    tmStyle.textContent = `@keyframes tm-spin{to{transform:rotate(360deg)}}`;
-    document.head.appendChild(tmStyle);
-
-    framework_scrollbars_inject();
+    framework_on_init();
 
     handle_kiosk();
 }

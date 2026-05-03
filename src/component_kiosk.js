@@ -9,8 +9,7 @@ function component_kiosk() {
 
     /* 1. Open the editor dialog (lazy-create on first use, just like the
           launcher button does). */
-    if (!container) createEditor();
-    container.style.display = "flex";
+    component_window_launch();
 
     /* 2. Maximize it if it isn't already. The maximize button is not held
           in a global ref, so locate it by text content within the header.
