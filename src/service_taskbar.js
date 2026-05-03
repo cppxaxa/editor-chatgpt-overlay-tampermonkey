@@ -52,6 +52,12 @@ function service_taskbar_init() {
     _service_taskbar_start_clock();
     _service_taskbar_install_hotkey();
 
+    /* Restore the "hidden shell" preference so the user's last choice
+       survives a reload. */
+    if (_service_taskbar_is_hidden()) {
+        _service_taskbar_hide_shell();
+    }
+
     /* Close start menu when clicking outside it. */
     document.addEventListener("mousedown", (e) => {
         if (!_taskbar_start_menu || _taskbar_start_menu.style.display === "none") return;
@@ -178,14 +184,14 @@ function _service_taskbar_build_taskbar() {
         width: "100vw",
         height: TASKBAR_HEIGHT + "px",
         zIndex: "1000000",
-        background: "rgba(20, 22, 28, 0.55)",
-        backdropFilter: "blur(18px) saturate(160%)",
-        webkitBackdropFilter: "blur(18px) saturate(160%)",
+        background: "rgba(48, 52, 64, 0.55)",
+        backdropFilter: "blur(18px) saturate(170%) brightness(115%)",
+        webkitBackdropFilter: "blur(18px) saturate(170%) brightness(115%)",
         /* Top edge drawn as an inset shadow rather than a real border so child
            buttons (Start, running-apps, system-tray) with their own background
            paint over it — letting the Start button visually overlap the
            taskbar's top edge instead of being cut off by it. */
-        boxShadow: "inset 0 1px 0 rgba(255,255,255,0.12), 0 -2px 12px rgba(0,0,0,0.45)",
+        boxShadow: "inset 0 1px 0 rgba(255,255,255,0.18), 0 -2px 12px rgba(0,0,0,0.35)",
         display: "flex",
         alignItems: "stretch",
         color: "white",
@@ -214,10 +220,10 @@ function _service_taskbar_build_taskbar() {
         "</svg>" +
         "<span>Start</span>";
     Object.assign(startBtn.style, {
-        background: "#1976d2",
+        background: "#2196f3",
         color: "white",
         border: "none",
-        borderRight: "1px solid rgba(255,255,255,0.08)",
+        borderRight: "1px solid rgba(255,255,255,0.12)",
         padding: "0 14px",
         cursor: "pointer",
         fontWeight: "bold",
@@ -226,8 +232,8 @@ function _service_taskbar_build_taskbar() {
         display: "flex",
         alignItems: "center"
     });
-    startBtn.onmouseover = () => { startBtn.style.background = "#2196f3"; };
-    startBtn.onmouseout  = () => { startBtn.style.background = "#1976d2"; };
+    startBtn.onmouseover = () => { startBtn.style.background = "#42a5f5"; };
+    startBtn.onmouseout  = () => { startBtn.style.background = "#2196f3"; };
     startBtn.onclick = (e) => {
         e.stopPropagation();
         /* Re-trigger click animation: remove + force reflow + re-add. */
@@ -361,12 +367,12 @@ function _service_taskbar_build_start_menu() {
         width: "320px",
         height: "420px",
         zIndex: "1000001",
-        background: "rgba(28, 30, 36, 0.65)",
-        backdropFilter: "blur(22px) saturate(160%)",
-        webkitBackdropFilter: "blur(22px) saturate(160%)",
-        border: "1px solid rgba(255,255,255,0.12)",
+        background: "rgba(56, 60, 72, 0.65)",
+        backdropFilter: "blur(22px) saturate(170%) brightness(115%)",
+        webkitBackdropFilter: "blur(22px) saturate(170%) brightness(115%)",
+        border: "1px solid rgba(255,255,255,0.16)",
         borderBottom: "none",
-        boxShadow: "0 -4px 24px rgba(0,0,0,0.55)",
+        boxShadow: "0 -4px 24px rgba(0,0,0,0.45)",
         display: "none",
         flexDirection: "column",
         color: "white",
@@ -374,18 +380,21 @@ function _service_taskbar_build_start_menu() {
         fontSize: "13px"
     });
 
-    /* Search */
+    /* Search row: input + arrow button (opens shell options menu). */
     const searchWrap = document.createElement("div");
     Object.assign(searchWrap.style, {
         padding: "10px",
-        borderBottom: "1px solid rgba(255,255,255,0.08)"
+        borderBottom: "1px solid rgba(255,255,255,0.08)",
+        display: "flex",
+        gap: "6px",
+        alignItems: "center"
     });
 
     const search = document.createElement("input");
     search.type = "text";
     search.placeholder = "Search apps…";
     Object.assign(search.style, {
-        width: "100%",
+        flex: "1",
         boxSizing: "border-box",
         background: "#15171c",
         color: "white",
@@ -408,8 +417,39 @@ function _service_taskbar_build_start_menu() {
         }
     });
     searchWrap.appendChild(search);
-    menu.appendChild(searchWrap);
     _taskbar_start_search = search;
+
+    /* Arrow button — opens a ServiceMenu anchored at the last pointer
+       position. Currently hosts the "Hide desktop shell" toggle. */
+    const arrow = document.createElement("button");
+    arrow.title = "More options";
+    arrow.innerHTML =
+        "<svg width='12' height='12' viewBox='0 0 12 12' " +
+        "xmlns='http://www.w3.org/2000/svg' style='display:block'>" +
+            "<polyline points='4,2 8,6 4,10' fill='none' stroke='currentColor' " +
+            "stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/>" +
+        "</svg>";
+    Object.assign(arrow.style, {
+        background: "rgba(255,255,255,0.06)",
+        color: "#e6e6e6",
+        border: "1px solid rgba(255,255,255,0.12)",
+        borderRadius: "4px",
+        cursor: "pointer",
+        padding: "5px 7px",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        flexShrink: "0"
+    });
+    arrow.onmouseover = () => { arrow.style.background = "rgba(255,255,255,0.14)"; };
+    arrow.onmouseout  = () => { arrow.style.background = "rgba(255,255,255,0.06)"; };
+    arrow.onclick = (e) => {
+        e.stopPropagation();
+        _service_taskbar_open_options_menu();
+    };
+    searchWrap.appendChild(arrow);
+
+    menu.appendChild(searchWrap);
 
     /* Scrollable apps list */
     const list = document.createElement("div");
@@ -624,4 +664,120 @@ function service_taskbar_restore_window(sw) {
     if (!sw) return;
     if (!sw.visible) sw.show();
     if (sw.mode === "minimized") sw.defaultMinimize();   // toggles back to normal
+}
+
+/* ---- Shell visibility ----
+   "Hide" the kdeubuntu shell means: take down the wallpaper and taskbar (and
+   close any open start menu / options menu), then drop a small floating
+   restore button at the bottom-right corner — same general anchor the simple
+   stacked launcher buttons used to live in. Clicking it brings the shell
+   back. State is kept in localStorage so the user's choice survives a reload. */
+
+const TASKBAR_HIDDEN_KEY = "tm_taskbar_shell_hidden";
+
+let _taskbar_restore_btn  = null;
+let _taskbar_options_menu = null;
+
+function _service_taskbar_open_options_menu() {
+
+    /* Anchor the popup at the last pointer position so it appears under the
+       user's mouse / touch (the requested behaviour). The menu also clamps
+       itself to the viewport, so anchoring at the arrow when the user
+       arrived via Alt+X (no recent click on the arrow) still works. */
+    const p = service_menu_last_pointer();
+
+    if (_taskbar_options_menu) _taskbar_options_menu.close();
+    _taskbar_options_menu = new ServiceMenu();
+
+    _taskbar_options_menu
+        .addToggle({
+            label: "Hide desktop shell",
+            getter: () => _service_taskbar_is_hidden(),
+            setter: (on) => {
+                if (on) _service_taskbar_hide_shell();
+                else    _service_taskbar_show_shell();
+            }
+        })
+        .openAt(p.x, p.y);
+}
+
+function _service_taskbar_is_hidden() {
+    try { return localStorage.getItem(TASKBAR_HIDDEN_KEY) === "true"; }
+    catch (e) { return false; }
+}
+
+function _service_taskbar_set_hidden(flag) {
+    try { localStorage.setItem(TASKBAR_HIDDEN_KEY, flag ? "true" : "false"); }
+    catch (e) {}
+}
+
+function _service_taskbar_hide_shell() {
+
+    _service_taskbar_close_start_menu();
+
+    if (_taskbar_wallpaper_el) _taskbar_wallpaper_el.style.display = "none";
+    if (_taskbar_el)           _taskbar_el.style.display           = "none";
+
+    _service_taskbar_set_hidden(true);
+    _service_taskbar_show_restore_btn();
+}
+
+function _service_taskbar_show_shell() {
+
+    if (_taskbar_wallpaper_el) _taskbar_wallpaper_el.style.display = "block";
+    if (_taskbar_el)           _taskbar_el.style.display           = "flex";
+
+    _service_taskbar_set_hidden(false);
+    _service_taskbar_hide_restore_btn();
+}
+
+/* Floating restore button, bottom-right. Mirrors the simple-launcher anchor
+   on the opposite corner so it doesn't visually clash with whatever the
+   user is doing. */
+function _service_taskbar_show_restore_btn() {
+
+    if (_taskbar_restore_btn) {
+        _taskbar_restore_btn.style.display = "flex";
+        return;
+    }
+
+    const btn = document.createElement("button");
+    btn.title = "Show desktop shell";
+    btn.innerHTML =
+        "<svg width='16' height='16' viewBox='0 0 24 24' " +
+        "xmlns='http://www.w3.org/2000/svg'>" +
+            "<rect x='2'  y='2'  width='9' height='9' fill='#ffffff'/>" +
+            "<rect x='13' y='2'  width='9' height='9' fill='#f0f0f0'/>" +
+            "<rect x='2'  y='13' width='9' height='9' fill='#d8d8d8'/>" +
+            "<rect x='13' y='13' width='9' height='9' fill='#b8b8b8'/>" +
+        "</svg>";
+    Object.assign(btn.style, {
+        position: "fixed",
+        right: "12px",
+        bottom: "12px",
+        zIndex: "1000005",
+        width: "32px",
+        height: "32px",
+        background: "#1976d2",
+        color: "white",
+        border: "1px solid rgba(255,255,255,0.2)",
+        borderRadius: "6px",
+        cursor: "pointer",
+        boxShadow: "0 4px 14px rgba(0,0,0,0.4)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center"
+    });
+    btn.onmouseover = () => { btn.style.background = "#2196f3"; };
+    btn.onmouseout  = () => { btn.style.background = "#1976d2"; };
+    btn.onclick = () => {
+        _service_taskbar_show_shell();
+    };
+
+    document.body.appendChild(btn);
+    _taskbar_restore_btn = btn;
+}
+
+function _service_taskbar_hide_restore_btn() {
+    if (_taskbar_restore_btn) _taskbar_restore_btn.style.display = "none";
 }

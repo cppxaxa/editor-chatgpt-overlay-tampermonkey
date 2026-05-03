@@ -2882,6 +2882,243 @@ function flushLlmQueue() {
     });
 }
 
+// ===== src/service_menu.js =====
+// -----------------------------------------------------------------------------
+// service_menu.js — generic popup menu service.
+//
+// Two pieces:
+//   - service_menu_last_pointer()  — global { x, y } of the last mousedown or
+//                                    touchstart anywhere in the document. Use
+//                                    when you want a popup to anchor at the
+//                                    point the user just interacted with
+//                                    (matches the "open menu under cursor"
+//                                    behaviour on a desktop and "open menu at
+//                                    finger" on touch).
+//   - ServiceMenu class            — accumulates entries via .addItem() /
+//                                    .addToggle() / .addSeparator(), then
+//                                    .openAt(x, y) renders a glass popup
+//                                    anchored at (x, y), clamped to viewport.
+//                                    Auto-closes on outside click / Escape /
+//                                    item activation.
+//
+// The class is intentionally light: no submenus, no icons, no keyboard nav
+// beyond Escape. Toggle items render with a small switch glyph that flips
+// state when clicked, then call the setter.
+// -----------------------------------------------------------------------------
+
+let _service_menu_last_x = window.innerWidth  / 2;
+let _service_menu_last_y = window.innerHeight / 2;
+
+document.addEventListener("mousedown", (e) => {
+    _service_menu_last_x = e.clientX;
+    _service_menu_last_y = e.clientY;
+}, true);
+
+document.addEventListener("touchstart", (e) => {
+    if (e.touches && e.touches[0]) {
+        _service_menu_last_x = e.touches[0].clientX;
+        _service_menu_last_y = e.touches[0].clientY;
+    }
+}, true);
+
+function service_menu_last_pointer() {
+    return { x: _service_menu_last_x, y: _service_menu_last_y };
+}
+
+class ServiceMenu {
+
+    constructor() {
+        this._entries = [];   // [{ kind, ...payload }]
+        this._popup   = null;
+    }
+
+    /* opts: { label, onClick }  — onClick is called after the menu closes. */
+    addItem(opts) {
+        this._entries.push({ kind: "item", label: opts.label, onClick: opts.onClick });
+        return this;
+    }
+
+    /* opts: { label, getter, setter }
+       - getter() returns the current bool.
+       - setter(newBool) is called when the user clicks the row. */
+    addToggle(opts) {
+        this._entries.push({
+            kind: "toggle",
+            label: opts.label,
+            getter: opts.getter,
+            setter: opts.setter
+        });
+        return this;
+    }
+
+    addSeparator() {
+        this._entries.push({ kind: "separator" });
+        return this;
+    }
+
+    /* Render the popup at viewport (x, y). The popup is clamped to fit
+       inside the viewport (so corner clicks still produce visible menus).
+       Returns the popup root <div>. */
+    openAt(x, y) {
+
+        this.close();
+
+        const popup = document.createElement("div");
+        Object.assign(popup.style, {
+            position: "fixed",
+            left: x + "px",
+            top:  y + "px",
+            minWidth: "200px",
+            zIndex: "1000010",
+            background: "rgba(28, 30, 36, 0.78)",
+            backdropFilter: "blur(22px) saturate(160%)",
+            webkitBackdropFilter: "blur(22px) saturate(160%)",
+            border: "1px solid rgba(255,255,255,0.12)",
+            borderRadius: "6px",
+            boxShadow: "0 8px 28px rgba(0,0,0,0.55)",
+            padding: "4px 0",
+            color: "white",
+            fontFamily: "'Segoe UI', system-ui, sans-serif",
+            fontSize: "13px",
+            userSelect: "none"
+        });
+
+        for (const e of this._entries) {
+            if (e.kind === "separator") {
+                const sep = document.createElement("div");
+                Object.assign(sep.style, {
+                    height: "1px",
+                    margin: "4px 0",
+                    background: "rgba(255,255,255,0.1)"
+                });
+                popup.appendChild(sep);
+                continue;
+            }
+
+            const row = document.createElement("button");
+            Object.assign(row.style, {
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "12px",
+                width: "100%",
+                background: "transparent",
+                color: "white",
+                border: "none",
+                padding: "8px 14px",
+                cursor: "pointer",
+                fontSize: "13px",
+                fontFamily: "inherit",
+                textAlign: "left"
+            });
+            row.onmouseover = () => { row.style.background = "rgba(255,255,255,0.08)"; };
+            row.onmouseout  = () => { row.style.background = "transparent"; };
+
+            const labelEl = document.createElement("span");
+            labelEl.textContent = e.label;
+            row.appendChild(labelEl);
+
+            if (e.kind === "toggle") {
+                const sw = _service_menu_make_switch(!!e.getter());
+                row.appendChild(sw.el);
+                row.onclick = () => {
+                    const next = !e.getter();
+                    sw.set(next);
+                    try { e.setter(next); } catch (err) { console.error(err); }
+                    this.close();
+                };
+            } else {
+                row.onclick = () => {
+                    this.close();
+                    try { e.onClick && e.onClick(); } catch (err) { console.error(err); }
+                };
+            }
+
+            popup.appendChild(row);
+        }
+
+        document.body.appendChild(popup);
+        this._popup = popup;
+
+        /* Clamp into viewport after measuring. */
+        requestAnimationFrame(() => {
+            if (!this._popup) return;
+            const r = this._popup.getBoundingClientRect();
+            if (r.right > window.innerWidth) {
+                this._popup.style.left = Math.max(0, window.innerWidth - r.width - 4) + "px";
+            }
+            if (r.bottom > window.innerHeight) {
+                this._popup.style.top = Math.max(0, window.innerHeight - r.height - 4) + "px";
+            }
+        });
+
+        /* Outside click / Escape close */
+        const onDown = (e) => {
+            if (this._popup && !this._popup.contains(e.target)) this.close();
+        };
+        const onKey = (e) => {
+            if (e.key === "Escape") this.close();
+        };
+        setTimeout(() => {
+            document.addEventListener("mousedown", onDown, true);
+            document.addEventListener("keydown",   onKey,  true);
+        }, 0);
+        this._cleanup = () => {
+            document.removeEventListener("mousedown", onDown, true);
+            document.removeEventListener("keydown",   onKey,  true);
+        };
+
+        return popup;
+    }
+
+    close() {
+        if (this._cleanup) { this._cleanup(); this._cleanup = null; }
+        if (this._popup && this._popup.parentNode) {
+            this._popup.parentNode.removeChild(this._popup);
+        }
+        this._popup = null;
+    }
+}
+
+/* ---- Internal switch widget (used by addToggle) ---- */
+
+function _service_menu_make_switch(initial) {
+
+    const track = document.createElement("span");
+    Object.assign(track.style, {
+        position: "relative",
+        display: "inline-block",
+        width: "30px",
+        height: "16px",
+        borderRadius: "8px",
+        background: initial ? "#4fc3f7" : "rgba(255,255,255,0.18)",
+        transition: "background 150ms ease",
+        flexShrink: "0"
+    });
+
+    const knob = document.createElement("span");
+    Object.assign(knob.style, {
+        position: "absolute",
+        top: "2px",
+        left: initial ? "16px" : "2px",
+        width: "12px",
+        height: "12px",
+        borderRadius: "50%",
+        background: "white",
+        transition: "left 150ms ease",
+        boxShadow: "0 1px 3px rgba(0,0,0,0.4)"
+    });
+    track.appendChild(knob);
+
+    return {
+        el: track,
+        set(on) {
+            track.style.background = on ? "#4fc3f7" : "rgba(255,255,255,0.18)";
+            knob.style.left = on ? "16px" : "2px";
+        }
+    };
+}
+
 // ===== src/service_taskbar.js =====
 // -----------------------------------------------------------------------------
 // service_taskbar.js — KDE/Ubuntu-style desktop shell + open-windows tracker.
@@ -2936,6 +3173,12 @@ function service_taskbar_init() {
     _service_taskbar_patch_service_window();
     _service_taskbar_start_clock();
     _service_taskbar_install_hotkey();
+
+    /* Restore the "hidden shell" preference so the user's last choice
+       survives a reload. */
+    if (_service_taskbar_is_hidden()) {
+        _service_taskbar_hide_shell();
+    }
 
     /* Close start menu when clicking outside it. */
     document.addEventListener("mousedown", (e) => {
@@ -3063,14 +3306,14 @@ function _service_taskbar_build_taskbar() {
         width: "100vw",
         height: TASKBAR_HEIGHT + "px",
         zIndex: "1000000",
-        background: "rgba(20, 22, 28, 0.55)",
-        backdropFilter: "blur(18px) saturate(160%)",
-        webkitBackdropFilter: "blur(18px) saturate(160%)",
+        background: "rgba(48, 52, 64, 0.55)",
+        backdropFilter: "blur(18px) saturate(170%) brightness(115%)",
+        webkitBackdropFilter: "blur(18px) saturate(170%) brightness(115%)",
         /* Top edge drawn as an inset shadow rather than a real border so child
            buttons (Start, running-apps, system-tray) with their own background
            paint over it — letting the Start button visually overlap the
            taskbar's top edge instead of being cut off by it. */
-        boxShadow: "inset 0 1px 0 rgba(255,255,255,0.12), 0 -2px 12px rgba(0,0,0,0.45)",
+        boxShadow: "inset 0 1px 0 rgba(255,255,255,0.18), 0 -2px 12px rgba(0,0,0,0.35)",
         display: "flex",
         alignItems: "stretch",
         color: "white",
@@ -3099,10 +3342,10 @@ function _service_taskbar_build_taskbar() {
         "</svg>" +
         "<span>Start</span>";
     Object.assign(startBtn.style, {
-        background: "#1976d2",
+        background: "#2196f3",
         color: "white",
         border: "none",
-        borderRight: "1px solid rgba(255,255,255,0.08)",
+        borderRight: "1px solid rgba(255,255,255,0.12)",
         padding: "0 14px",
         cursor: "pointer",
         fontWeight: "bold",
@@ -3111,8 +3354,8 @@ function _service_taskbar_build_taskbar() {
         display: "flex",
         alignItems: "center"
     });
-    startBtn.onmouseover = () => { startBtn.style.background = "#2196f3"; };
-    startBtn.onmouseout  = () => { startBtn.style.background = "#1976d2"; };
+    startBtn.onmouseover = () => { startBtn.style.background = "#42a5f5"; };
+    startBtn.onmouseout  = () => { startBtn.style.background = "#2196f3"; };
     startBtn.onclick = (e) => {
         e.stopPropagation();
         /* Re-trigger click animation: remove + force reflow + re-add. */
@@ -3246,12 +3489,12 @@ function _service_taskbar_build_start_menu() {
         width: "320px",
         height: "420px",
         zIndex: "1000001",
-        background: "rgba(28, 30, 36, 0.65)",
-        backdropFilter: "blur(22px) saturate(160%)",
-        webkitBackdropFilter: "blur(22px) saturate(160%)",
-        border: "1px solid rgba(255,255,255,0.12)",
+        background: "rgba(56, 60, 72, 0.65)",
+        backdropFilter: "blur(22px) saturate(170%) brightness(115%)",
+        webkitBackdropFilter: "blur(22px) saturate(170%) brightness(115%)",
+        border: "1px solid rgba(255,255,255,0.16)",
         borderBottom: "none",
-        boxShadow: "0 -4px 24px rgba(0,0,0,0.55)",
+        boxShadow: "0 -4px 24px rgba(0,0,0,0.45)",
         display: "none",
         flexDirection: "column",
         color: "white",
@@ -3259,18 +3502,21 @@ function _service_taskbar_build_start_menu() {
         fontSize: "13px"
     });
 
-    /* Search */
+    /* Search row: input + arrow button (opens shell options menu). */
     const searchWrap = document.createElement("div");
     Object.assign(searchWrap.style, {
         padding: "10px",
-        borderBottom: "1px solid rgba(255,255,255,0.08)"
+        borderBottom: "1px solid rgba(255,255,255,0.08)",
+        display: "flex",
+        gap: "6px",
+        alignItems: "center"
     });
 
     const search = document.createElement("input");
     search.type = "text";
     search.placeholder = "Search apps…";
     Object.assign(search.style, {
-        width: "100%",
+        flex: "1",
         boxSizing: "border-box",
         background: "#15171c",
         color: "white",
@@ -3293,8 +3539,39 @@ function _service_taskbar_build_start_menu() {
         }
     });
     searchWrap.appendChild(search);
-    menu.appendChild(searchWrap);
     _taskbar_start_search = search;
+
+    /* Arrow button — opens a ServiceMenu anchored at the last pointer
+       position. Currently hosts the "Hide desktop shell" toggle. */
+    const arrow = document.createElement("button");
+    arrow.title = "More options";
+    arrow.innerHTML =
+        "<svg width='12' height='12' viewBox='0 0 12 12' " +
+        "xmlns='http://www.w3.org/2000/svg' style='display:block'>" +
+            "<polyline points='4,2 8,6 4,10' fill='none' stroke='currentColor' " +
+            "stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/>" +
+        "</svg>";
+    Object.assign(arrow.style, {
+        background: "rgba(255,255,255,0.06)",
+        color: "#e6e6e6",
+        border: "1px solid rgba(255,255,255,0.12)",
+        borderRadius: "4px",
+        cursor: "pointer",
+        padding: "5px 7px",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        flexShrink: "0"
+    });
+    arrow.onmouseover = () => { arrow.style.background = "rgba(255,255,255,0.14)"; };
+    arrow.onmouseout  = () => { arrow.style.background = "rgba(255,255,255,0.06)"; };
+    arrow.onclick = (e) => {
+        e.stopPropagation();
+        _service_taskbar_open_options_menu();
+    };
+    searchWrap.appendChild(arrow);
+
+    menu.appendChild(searchWrap);
 
     /* Scrollable apps list */
     const list = document.createElement("div");
@@ -3509,6 +3786,122 @@ function service_taskbar_restore_window(sw) {
     if (!sw) return;
     if (!sw.visible) sw.show();
     if (sw.mode === "minimized") sw.defaultMinimize();   // toggles back to normal
+}
+
+/* ---- Shell visibility ----
+   "Hide" the kdeubuntu shell means: take down the wallpaper and taskbar (and
+   close any open start menu / options menu), then drop a small floating
+   restore button at the bottom-right corner — same general anchor the simple
+   stacked launcher buttons used to live in. Clicking it brings the shell
+   back. State is kept in localStorage so the user's choice survives a reload. */
+
+const TASKBAR_HIDDEN_KEY = "tm_taskbar_shell_hidden";
+
+let _taskbar_restore_btn  = null;
+let _taskbar_options_menu = null;
+
+function _service_taskbar_open_options_menu() {
+
+    /* Anchor the popup at the last pointer position so it appears under the
+       user's mouse / touch (the requested behaviour). The menu also clamps
+       itself to the viewport, so anchoring at the arrow when the user
+       arrived via Alt+X (no recent click on the arrow) still works. */
+    const p = service_menu_last_pointer();
+
+    if (_taskbar_options_menu) _taskbar_options_menu.close();
+    _taskbar_options_menu = new ServiceMenu();
+
+    _taskbar_options_menu
+        .addToggle({
+            label: "Hide desktop shell",
+            getter: () => _service_taskbar_is_hidden(),
+            setter: (on) => {
+                if (on) _service_taskbar_hide_shell();
+                else    _service_taskbar_show_shell();
+            }
+        })
+        .openAt(p.x, p.y);
+}
+
+function _service_taskbar_is_hidden() {
+    try { return localStorage.getItem(TASKBAR_HIDDEN_KEY) === "true"; }
+    catch (e) { return false; }
+}
+
+function _service_taskbar_set_hidden(flag) {
+    try { localStorage.setItem(TASKBAR_HIDDEN_KEY, flag ? "true" : "false"); }
+    catch (e) {}
+}
+
+function _service_taskbar_hide_shell() {
+
+    _service_taskbar_close_start_menu();
+
+    if (_taskbar_wallpaper_el) _taskbar_wallpaper_el.style.display = "none";
+    if (_taskbar_el)           _taskbar_el.style.display           = "none";
+
+    _service_taskbar_set_hidden(true);
+    _service_taskbar_show_restore_btn();
+}
+
+function _service_taskbar_show_shell() {
+
+    if (_taskbar_wallpaper_el) _taskbar_wallpaper_el.style.display = "block";
+    if (_taskbar_el)           _taskbar_el.style.display           = "flex";
+
+    _service_taskbar_set_hidden(false);
+    _service_taskbar_hide_restore_btn();
+}
+
+/* Floating restore button, bottom-right. Mirrors the simple-launcher anchor
+   on the opposite corner so it doesn't visually clash with whatever the
+   user is doing. */
+function _service_taskbar_show_restore_btn() {
+
+    if (_taskbar_restore_btn) {
+        _taskbar_restore_btn.style.display = "flex";
+        return;
+    }
+
+    const btn = document.createElement("button");
+    btn.title = "Show desktop shell";
+    btn.innerHTML =
+        "<svg width='16' height='16' viewBox='0 0 24 24' " +
+        "xmlns='http://www.w3.org/2000/svg'>" +
+            "<rect x='2'  y='2'  width='9' height='9' fill='#ffffff'/>" +
+            "<rect x='13' y='2'  width='9' height='9' fill='#f0f0f0'/>" +
+            "<rect x='2'  y='13' width='9' height='9' fill='#d8d8d8'/>" +
+            "<rect x='13' y='13' width='9' height='9' fill='#b8b8b8'/>" +
+        "</svg>";
+    Object.assign(btn.style, {
+        position: "fixed",
+        right: "12px",
+        bottom: "12px",
+        zIndex: "1000005",
+        width: "32px",
+        height: "32px",
+        background: "#1976d2",
+        color: "white",
+        border: "1px solid rgba(255,255,255,0.2)",
+        borderRadius: "6px",
+        cursor: "pointer",
+        boxShadow: "0 4px 14px rgba(0,0,0,0.4)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center"
+    });
+    btn.onmouseover = () => { btn.style.background = "#2196f3"; };
+    btn.onmouseout  = () => { btn.style.background = "#1976d2"; };
+    btn.onclick = () => {
+        _service_taskbar_show_shell();
+    };
+
+    document.body.appendChild(btn);
+    _taskbar_restore_btn = btn;
+}
+
+function _service_taskbar_hide_restore_btn() {
+    if (_taskbar_restore_btn) _taskbar_restore_btn.style.display = "none";
 }
 
 // ===== src/service_undoredo.js =====
