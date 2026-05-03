@@ -4719,33 +4719,77 @@ class ServiceWindow {
     }
 }
 
-/* ---- Drag ---- */
+/* ---- Drag ----
+   Mouse + touch. The header element gets `touch-action: none` so the
+   browser doesn't claim the gesture for scrolling/panning — without that,
+   touchmove only fires once before the browser takes over. touchmove +
+   touchstart listeners are registered with { passive: false } so we can
+   call preventDefault() and keep the page from scrolling under the finger
+   while the title bar is being dragged. */
 
 function service_window_make_draggable(element, handle, opts) {
 
     const isDraggable = (opts && opts.isDraggable) || (() => true);
     const onDragEnd   = (opts && opts.onDragEnd)   || (() => {});
 
+    handle.style.touchAction = "none";
+
     let isDown = false;
-    let offsetX, offsetY;
+    let offsetX = 0, offsetY = 0;
 
-    handle.addEventListener("mousedown", (e) => {
-        if (!isDraggable()) return;
+    const start = (clientX, clientY) => {
+        if (!isDraggable()) return false;
         isDown = true;
-        offsetX = e.clientX - element.offsetLeft;
-        offsetY = e.clientY - element.offsetTop;
-    });
-
-    document.addEventListener("mouseup", () => {
+        offsetX = clientX - element.offsetLeft;
+        offsetY = clientY - element.offsetTop;
+        return true;
+    };
+    const move = (clientX, clientY) => {
+        if (!isDown || !isDraggable()) return;
+        element.style.left = (clientX - offsetX) + "px";
+        element.style.top  = (clientY - offsetY) + "px";
+    };
+    const end = () => {
         if (isDown) onDragEnd();
         isDown = false;
-    });
+    };
 
-    document.addEventListener("mousemove", (e) => {
-        if (!isDown || !isDraggable()) return;
-        element.style.left = e.clientX - offsetX + "px";
-        element.style.top  = e.clientY - offsetY + "px";
+    /* Mouse */
+    handle.addEventListener("mousedown", (e) => {
+        start(e.clientX, e.clientY);
     });
+    document.addEventListener("mousemove", (e) => {
+        move(e.clientX, e.clientY);
+    });
+    document.addEventListener("mouseup", end);
+
+    /* Touch — touchstart and touchmove are non-passive so preventDefault
+       can suppress the page-level scroll/pan that would otherwise eat the
+       drag. touchcancel mirrors touchend so a system-interrupted drag
+       doesn't leave isDown stuck true.
+
+       Skip the drag entirely when the touch target is a <button> inside
+       the header (min/max/close, tab buttons, action buttons). Calling
+       preventDefault on such touches would suppress the synthetic click
+       the browser fires, breaking taps. The buttons themselves keep
+       default touch-action so their tap → click synthesis still works. */
+    handle.addEventListener("touchstart", (e) => {
+        if (e.target && e.target.closest && e.target.closest("button")) return;
+        const t = e.touches && e.touches[0];
+        if (!t) return;
+        if (start(t.clientX, t.clientY)) e.preventDefault();
+    }, { passive: false });
+
+    document.addEventListener("touchmove", (e) => {
+        if (!isDown) return;
+        const t = e.touches && e.touches[0];
+        if (!t) return;
+        move(t.clientX, t.clientY);
+        e.preventDefault();
+    }, { passive: false });
+
+    document.addEventListener("touchend",    end);
+    document.addEventListener("touchcancel", end);
 }
 
 /* ---- Resize handle ---- */
