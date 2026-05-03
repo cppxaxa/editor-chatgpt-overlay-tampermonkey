@@ -46,6 +46,7 @@ function framework_on_init() {
     component_linecommand_handle_init();
     component_window_handle_init();
     component_calc_handle_init();
+    component_console_handle_init();
     component_chat_handle_init();
     component_localstorage_handle_init();
     service_toast_handle_init();
