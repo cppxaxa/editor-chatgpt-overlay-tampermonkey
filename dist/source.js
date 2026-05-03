@@ -27,15 +27,8 @@
 // framework.js — framework-level shared state and lifecycle bootstrap.
 //
 // Component-owned state has been moved into the owning component_*.js files.
-// What lives here is genuinely cross-component:
-//   - waitAbortController: the single in-flight cancellable LLM request,
-//     shared by every tab generator, line commands, codecheck, waitingui,
-//     and service_llm.
+// LLM cancellation state lives inside service_llm.js (see cancelCurrentLlmJob).
 // -----------------------------------------------------------------------------
-
-/* ---- Framework-level shared state ---- */
-
-let waitAbortController = null;
 
 /* ---- Bootstrap ---- */
 
@@ -217,8 +210,6 @@ function handleCodeCheck() {
         return;
     }
 
-    waitAbortController = new AbortController();
-
     const numberedCode = code.split("\n").map((line, i) => (i + 1) + "> " + line).join("\n");
 
     const onstart = (ctx) => {
@@ -227,7 +218,6 @@ function handleCodeCheck() {
 
     const onend = (ctx) => {
         hideWaitingUI();
-        waitAbortController = null;
 
         if (ctx.cancelled || ctx.error) return;
 
@@ -615,13 +605,11 @@ function handleLineAction() {
     };
 
     const onstart = (ctx) => {
-        waitAbortController = new AbortController();
         showWaitingUI();
     };
 
     const onend = (ctx) => {
         hideWaitingUI();
-        waitAbortController = null;
 
         if (ctx.cancelled || ctx.error) return;
         if (ctx.result) replaceLineWithResponse(ctx.result);
@@ -720,16 +708,13 @@ function generateAsciiDiagram(code, hash) {
         "\n\nCode:\n" + code;
 
     const onstart = (ctx) => {
-        waitAbortController = new AbortController();
         showWaitingUI();
     };
 
     const onend = (ctx) => {
-        const wasAborted = waitAbortController && waitAbortController.signal.aborted;
-        waitAbortController = null;
         hideWaitingUI();
 
-        if (wasAborted || ctx.cancelled) return;
+        if (ctx.cancelled) return;
 
         if (ctx.error) {
             if (activeTab === "ascii") asciiTA.value = "(Error generating ASCII diagram: " + ctx.error.message + ")";
@@ -779,16 +764,13 @@ function generateQuestion(code, hash) {
         "Code:\n" + code;
 
     const onstart = (ctx) => {
-        waitAbortController = new AbortController();
         showWaitingUI();
     };
 
     const onend = (ctx) => {
-        const wasAborted = waitAbortController && waitAbortController.signal.aborted;
-        waitAbortController = null;
         hideWaitingUI();
 
-        if (wasAborted || ctx.cancelled) return;
+        if (ctx.cancelled) return;
 
         if (ctx.error) {
             if (activeTab === "question") questionTA.value = "(Error generating question: " + ctx.error.message + ")";
@@ -843,16 +825,13 @@ function generateSnippets(code, hash) {
         "Code:\n" + code;
 
     const onstart = (ctx) => {
-        waitAbortController = new AbortController();
         showWaitingUI();
     };
 
     const onend = (ctx) => {
-        const wasAborted = waitAbortController && waitAbortController.signal.aborted;
-        waitAbortController = null;
         hideWaitingUI();
 
-        if (wasAborted || ctx.cancelled) return;
+        if (ctx.cancelled) return;
 
         if (ctx.error) {
             if (activeTab === "snippets") snippetsTA.value = "(Error generating snippets: " + ctx.error.message + ")";
@@ -940,16 +919,13 @@ function generateSpreview(code, hash) {
         "Code:\n" + code;
 
     const onstart = (ctx) => {
-        waitAbortController = new AbortController();
         showWaitingUI();
     };
 
     const onend = (ctx) => {
-        const wasAborted = waitAbortController && waitAbortController.signal.aborted;
-        waitAbortController = null;
         hideWaitingUI();
 
-        if (wasAborted || ctx.cancelled) return;
+        if (ctx.cancelled) return;
 
         if (ctx.error) {
             if (activeTab === "spreview") setSpreviewContent("<p style='font-family:monospace;padding:20px;color:red'>(Error: " + ctx.error.message + ")</p>");
@@ -1256,7 +1232,7 @@ function showWaitingUI() {
     cancelBtn.onclick = (e) => {
         e.stopPropagation();
         if (typeof flushLlmQueue === "function") flushLlmQueue();
-        if (waitAbortController) waitAbortController.abort();
+        if (typeof cancelCurrentLlmJob === "function") cancelCurrentLlmJob();
     };
 
     if (actionBtns) {
@@ -2207,8 +2183,9 @@ function showResultDialog(title, body) {
 // DOM for a new assistant message, waits for streaming to finish, and returns
 // the cleaned text.
 //
-// Honours the global `waitAbortController` (declared in framework.js) so the
-// scratchpad's Cancel button can interrupt an in-flight wait.
+// Cancellation: the queue tracks the currently-running job. Calling
+// `cancelCurrentLlmJob()` flips a flag that `waitForAssistantResponse_llm`
+// observes on its next poll tick and bails out, resolving with `null`.
 //
 // All helpers are named with a `_llm` suffix so they don't collide with the
 // equivalents in component_chatgpt.js when both files are concatenated into
@@ -2362,9 +2339,7 @@ function extractCleanText_llm(messageEl) {
 
 function waitForAssistantResponse_llm(previousCount) {
 
-    const signal = (typeof waitAbortController !== "undefined" && waitAbortController)
-        ? waitAbortController.signal
-        : null;
+    const isCancelled = () => !!(_llm_currentJob && _llm_currentJob.cancelled);
 
     return new Promise(resolve => {
 
@@ -2372,7 +2347,7 @@ function waitForAssistantResponse_llm(previousCount) {
 
         const interval = setInterval(() => {
 
-            if (signal && signal.aborted) {
+            if (isCancelled()) {
                 clearInterval(interval);
                 resolve(null);
                 return;
@@ -2396,7 +2371,7 @@ function waitForAssistantResponse_llm(previousCount) {
 
                     setTimeout(() => {
 
-                        if (signal && signal.aborted) {
+                        if (isCancelled()) {
                             clearInterval(interval);
                             resolve(null);
                             return;
@@ -2464,7 +2439,8 @@ async function sendMessage(prompt) {
 //   - On `onstart`, only `prompt` is meaningful.
 //   - On `onend`, `result` is the cleaned response text (or null on
 //     failure/cancel), `error` is the thrown error if any, and `cancelled`
-//     is true if `waitAbortController` aborted the wait.
+//     is true if the user cancelled the wait (via cancelCurrentLlmJob)
+//     or if the queue was flushed before the job ran.
 //
 // Returns a Promise that resolves with the same `ctx` passed to `onend`, so
 // callers may either use callbacks, await the promise, or both.
@@ -2472,6 +2448,7 @@ async function sendMessage(prompt) {
 
 const _llm_queue = [];
 let _llm_processing = false;
+let _llm_currentJob = null;   // { ctx, cancelled } while a job is in flight
 
 function submitMessage(prompt, onstart, onend) {
 
@@ -2494,6 +2471,8 @@ async function _llm_drain_queue() {
         const job = _llm_queue.shift();
         const ctx = { prompt: job.prompt, result: null, error: null, cancelled: false };
 
+        _llm_currentJob = { ctx, cancelled: false };
+
         try {
             if (typeof job.onstart === "function") {
                 try { job.onstart(ctx); }
@@ -2503,12 +2482,18 @@ async function _llm_drain_queue() {
             const result = await sendMessage(job.prompt);
 
             ctx.result = result;
-            if (result === null) ctx.cancelled = true;
+            if (_llm_currentJob.cancelled) {
+                ctx.cancelled = true;
+            } else if (result === null) {
+                ctx.cancelled = true;
+            }
 
         } catch (err) {
             ctx.error = err;
             console.error("submitMessage job failed:", err);
         }
+
+        _llm_currentJob = null;
 
         if (typeof job.onend === "function") {
             try { job.onend(ctx); }
@@ -2522,9 +2507,18 @@ async function _llm_drain_queue() {
 }
 
 // -----------------------------------------------------------------------------
+// cancelCurrentLlmJob() — flip the cancel flag on the currently-running job
+// (if any). The polling loop in waitForAssistantResponse_llm observes this on
+// its next tick and bails out, resolving with null. No-op if no job is in
+// flight.
+// -----------------------------------------------------------------------------
+function cancelCurrentLlmJob() {
+    if (_llm_currentJob) _llm_currentJob.cancelled = true;
+}
+
+// -----------------------------------------------------------------------------
 // flushLlmQueue() — drop all PENDING submitMessage jobs (does not touch the
-// currently-running one; that is interrupted via the existing
-// `waitAbortController` path the running job already listens to).
+// currently-running one; cancel that via cancelCurrentLlmJob()).
 // Each dropped job receives an `onend({ cancelled: true })` so its caller can
 // tear down UI state, then its promise resolves.
 // -----------------------------------------------------------------------------

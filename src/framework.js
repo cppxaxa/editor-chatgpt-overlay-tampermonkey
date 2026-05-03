@@ -2,15 +2,8 @@
 // framework.js — framework-level shared state and lifecycle bootstrap.
 //
 // Component-owned state has been moved into the owning component_*.js files.
-// What lives here is genuinely cross-component:
-//   - waitAbortController: the single in-flight cancellable LLM request,
-//     shared by every tab generator, line commands, codecheck, waitingui,
-//     and service_llm.
+// LLM cancellation state lives inside service_llm.js (see cancelCurrentLlmJob).
 // -----------------------------------------------------------------------------
-
-/* ---- Framework-level shared state ---- */
-
-let waitAbortController = null;
 
 /* ---- Bootstrap ---- */
 

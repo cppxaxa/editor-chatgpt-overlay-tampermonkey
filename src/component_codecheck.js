@@ -142,8 +142,6 @@ function handleCodeCheck() {
         return;
     }
 
-    waitAbortController = new AbortController();
-
     const numberedCode = code.split("\n").map((line, i) => (i + 1) + "> " + line).join("\n");
 
     const onstart = (ctx) => {
@@ -152,7 +150,6 @@ function handleCodeCheck() {
 
     const onend = (ctx) => {
         hideWaitingUI();
-        waitAbortController = null;
 
         if (ctx.cancelled || ctx.error) return;
 

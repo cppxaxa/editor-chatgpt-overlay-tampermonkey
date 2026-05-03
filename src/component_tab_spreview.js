@@ -66,16 +66,13 @@ function generateSpreview(code, hash) {
         "Code:\n" + code;
 
     const onstart = (ctx) => {
-        waitAbortController = new AbortController();
         showWaitingUI();
     };
 
     const onend = (ctx) => {
-        const wasAborted = waitAbortController && waitAbortController.signal.aborted;
-        waitAbortController = null;
         hideWaitingUI();
 
-        if (wasAborted || ctx.cancelled) return;
+        if (ctx.cancelled) return;
 
         if (ctx.error) {
             if (activeTab === "spreview") setSpreviewContent("<p style='font-family:monospace;padding:20px;color:red'>(Error: " + ctx.error.message + ")</p>");

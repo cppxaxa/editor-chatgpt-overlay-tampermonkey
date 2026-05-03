@@ -17,16 +17,13 @@ function generateAsciiDiagram(code, hash) {
         "\n\nCode:\n" + code;
 
     const onstart = (ctx) => {
-        waitAbortController = new AbortController();
         showWaitingUI();
     };
 
     const onend = (ctx) => {
-        const wasAborted = waitAbortController && waitAbortController.signal.aborted;
-        waitAbortController = null;
         hideWaitingUI();
 
-        if (wasAborted || ctx.cancelled) return;
+        if (ctx.cancelled) return;
 
         if (ctx.error) {
             if (activeTab === "ascii") asciiTA.value = "(Error generating ASCII diagram: " + ctx.error.message + ")";

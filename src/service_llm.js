@@ -10,8 +10,9 @@
 // DOM for a new assistant message, waits for streaming to finish, and returns
 // the cleaned text.
 //
-// Honours the global `waitAbortController` (declared in framework.js) so the
-// scratchpad's Cancel button can interrupt an in-flight wait.
+// Cancellation: the queue tracks the currently-running job. Calling
+// `cancelCurrentLlmJob()` flips a flag that `waitForAssistantResponse_llm`
+// observes on its next poll tick and bails out, resolving with `null`.
 //
 // All helpers are named with a `_llm` suffix so they don't collide with the
 // equivalents in component_chatgpt.js when both files are concatenated into
@@ -165,9 +166,7 @@ function extractCleanText_llm(messageEl) {
 
 function waitForAssistantResponse_llm(previousCount) {
 
-    const signal = (typeof waitAbortController !== "undefined" && waitAbortController)
-        ? waitAbortController.signal
-        : null;
+    const isCancelled = () => !!(_llm_currentJob && _llm_currentJob.cancelled);
 
     return new Promise(resolve => {
 
@@ -175,7 +174,7 @@ function waitForAssistantResponse_llm(previousCount) {
 
         const interval = setInterval(() => {
 
-            if (signal && signal.aborted) {
+            if (isCancelled()) {
                 clearInterval(interval);
                 resolve(null);
                 return;
@@ -199,7 +198,7 @@ function waitForAssistantResponse_llm(previousCount) {
 
                     setTimeout(() => {
 
-                        if (signal && signal.aborted) {
+                        if (isCancelled()) {
                             clearInterval(interval);
                             resolve(null);
                             return;
@@ -267,7 +266,8 @@ async function sendMessage(prompt) {
 //   - On `onstart`, only `prompt` is meaningful.
 //   - On `onend`, `result` is the cleaned response text (or null on
 //     failure/cancel), `error` is the thrown error if any, and `cancelled`
-//     is true if `waitAbortController` aborted the wait.
+//     is true if the user cancelled the wait (via cancelCurrentLlmJob)
+//     or if the queue was flushed before the job ran.
 //
 // Returns a Promise that resolves with the same `ctx` passed to `onend`, so
 // callers may either use callbacks, await the promise, or both.
@@ -275,6 +275,7 @@ async function sendMessage(prompt) {
 
 const _llm_queue = [];
 let _llm_processing = false;
+let _llm_currentJob = null;   // { ctx, cancelled } while a job is in flight
 
 function submitMessage(prompt, onstart, onend) {
 
@@ -297,6 +298,8 @@ async function _llm_drain_queue() {
         const job = _llm_queue.shift();
         const ctx = { prompt: job.prompt, result: null, error: null, cancelled: false };
 
+        _llm_currentJob = { ctx, cancelled: false };
+
         try {
             if (typeof job.onstart === "function") {
                 try { job.onstart(ctx); }
@@ -306,12 +309,18 @@ async function _llm_drain_queue() {
             const result = await sendMessage(job.prompt);
 
             ctx.result = result;
-            if (result === null) ctx.cancelled = true;
+            if (_llm_currentJob.cancelled) {
+                ctx.cancelled = true;
+            } else if (result === null) {
+                ctx.cancelled = true;
+            }
 
         } catch (err) {
             ctx.error = err;
             console.error("submitMessage job failed:", err);
         }
+
+        _llm_currentJob = null;
 
         if (typeof job.onend === "function") {
             try { job.onend(ctx); }
@@ -325,9 +334,18 @@ async function _llm_drain_queue() {
 }
 
 // -----------------------------------------------------------------------------
+// cancelCurrentLlmJob() — flip the cancel flag on the currently-running job
+// (if any). The polling loop in waitForAssistantResponse_llm observes this on
+// its next tick and bails out, resolving with null. No-op if no job is in
+// flight.
+// -----------------------------------------------------------------------------
+function cancelCurrentLlmJob() {
+    if (_llm_currentJob) _llm_currentJob.cancelled = true;
+}
+
+// -----------------------------------------------------------------------------
 // flushLlmQueue() — drop all PENDING submitMessage jobs (does not touch the
-// currently-running one; that is interrupted via the existing
-// `waitAbortController` path the running job already listens to).
+// currently-running one; cancel that via cancelCurrentLlmJob()).
 // Each dropped job receives an `onend({ cancelled: true })` so its caller can
 // tear down UI state, then its promise resolves.
 // -----------------------------------------------------------------------------

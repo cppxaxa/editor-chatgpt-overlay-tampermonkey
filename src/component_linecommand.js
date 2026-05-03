@@ -58,13 +58,11 @@ function handleLineAction() {
     };
 
     const onstart = (ctx) => {
-        waitAbortController = new AbortController();
         showWaitingUI();
     };
 
     const onend = (ctx) => {
         hideWaitingUI();
-        waitAbortController = null;
 
         if (ctx.cancelled || ctx.error) return;
         if (ctx.result) replaceLineWithResponse(ctx.result);
