@@ -67,8 +67,14 @@ function service_taskbar_init() {
     });
 }
 
-function service_taskbar_register_app(label, onlaunch) {
-    _taskbar_apps.push({ label, onlaunch });
+function service_taskbar_register_app(label, onlaunch, opts) {
+    opts = opts || {};
+    _taskbar_apps.push({
+        label:    label,
+        onlaunch: onlaunch,
+        icon:     opts.icon  || null,
+        title:    opts.title || null
+    });
     _service_taskbar_rebuild_start_list("");
 }
 
@@ -548,9 +554,12 @@ function _service_taskbar_rebuild_start_list(filter) {
     matches.forEach(app => {
         const entry = document.createElement("button");
         entry.dataset.appEntry = "1";
-        entry.textContent = app.label;
+        if (app.title) entry.title = app.title;
+
         Object.assign(entry.style, {
-            display: "block",
+            display: "flex",
+            alignItems: "center",
+            gap: "10px",
             width: "100%",
             textAlign: "left",
             background: "transparent",
@@ -561,6 +570,73 @@ function _service_taskbar_rebuild_start_list(filter) {
             fontSize: "13px",
             fontFamily: "inherit"
         });
+
+        /* Icon slot — fixed 22px square so labels align across rows whether
+           or not an icon was supplied. Falls back to the first character of
+           the label, styled like a tile, so registrations that didn't pass
+           an icon still get a consistent look. Emoji-friendly font stack
+           and a slightly larger font size since the typical icon is an
+           emoji glyph. */
+        const iconEl = document.createElement("span");
+        Object.assign(iconEl.style, {
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: "22px",
+            height: "22px",
+            flexShrink: "0",
+            fontSize: "16px",
+            lineHeight: "1",
+            color: "#cfd2d8",
+            fontFamily: "'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', system-ui, sans-serif"
+        });
+        if (app.icon) {
+            iconEl.innerHTML = app.icon;
+        } else {
+            iconEl.textContent = (app.label || "?").charAt(0);
+            iconEl.style.background = "rgba(255,255,255,0.10)";
+            iconEl.style.borderRadius = "4px";
+            iconEl.style.fontSize = "13px";
+            iconEl.style.fontWeight = "bold";
+        }
+        entry.appendChild(iconEl);
+
+        /* Text stack — primary label on top; if a `title` was supplied AND
+           it differs from the label, show it as a dim second line for
+           context (similar to Windows/KDE start-menu app summaries). */
+        const textWrap = document.createElement("span");
+        Object.assign(textWrap.style, {
+            display: "flex",
+            flexDirection: "column",
+            minWidth: "0",
+            flex: "1"
+        });
+
+        const primary = document.createElement("span");
+        primary.textContent = app.label;
+        Object.assign(primary.style, {
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis"
+        });
+        textWrap.appendChild(primary);
+
+        if (app.title && app.title !== app.label) {
+            const secondary = document.createElement("span");
+            secondary.textContent = app.title;
+            Object.assign(secondary.style, {
+                fontSize: "11px",
+                color: "#9aa0aa",
+                marginTop: "1px",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis"
+            });
+            textWrap.appendChild(secondary);
+        }
+
+        entry.appendChild(textWrap);
+
         entry.onmouseover = () => { entry.style.background = "rgba(255,255,255,0.08)"; };
         entry.onmouseout  = () => { entry.style.background = "transparent"; };
         entry.onclick = () => {
@@ -747,7 +823,9 @@ function service_taskbar_register_tray_icon(opts) {
     if (!_taskbar_tray_el) return null;
 
     const btn = document.createElement("button");
-    btn.textContent = opts.icon || "?";
+    /* Accept either inline HTML (e.g. an SVG) or a plain text/emoji glyph
+       — innerHTML handles both. Falls back to "?" when no icon is given. */
+    btn.innerHTML = opts.icon || "?";
     if (opts.title) btn.title = opts.title;
 
     Object.assign(btn.style, {
@@ -757,9 +835,12 @@ function service_taskbar_register_tray_icon(opts) {
         borderRadius: "3px",
         cursor: "pointer",
         padding: "2px 7px",
-        fontSize: "13px",
-        fontWeight: "bold",
-        fontFamily: "inherit",
+        /* 15px so emoji icons (the typical case) read clearly. Plain
+           text glyphs at this size still look correct on a 26px button. */
+        fontSize: "15px",
+        fontWeight: "normal",
+        fontFamily: "'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', system-ui, sans-serif",
+        lineHeight: "1",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",

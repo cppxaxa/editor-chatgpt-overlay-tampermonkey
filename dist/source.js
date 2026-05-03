@@ -34,10 +34,16 @@
 
 function framework_register_launcher() {
 
-    framework_launcher_register("E", component_window_launch);
+    framework_launcher_register("Code Editor", component_window_launch, {
+        icon:  "📝",
+        title: "Code Editor"
+    });
     /* Calc lives in the system tray (registered in component_calc_handle_init).
        Skip the Start-menu launcher to avoid double representation. */
-    framework_launcher_register("L", component_localstorage_launch);
+    framework_launcher_register("Local Storage", component_localstorage_launch, {
+        icon:  "🗂️",
+        title: "Local Storage"
+    });
 
     framework_on_launcher_registered();
 }
@@ -175,11 +181,33 @@ function component_calc_handle_init() {
     ServiceWindow.registerApp("calc", component_calc_launch);
 
     if (typeof service_taskbar_register_tray_app === "function") {
+        /* Inline SVG calculator: 14x14 viewBox, currentColor strokes so it
+           inherits the tray's text colour (and updates on hover). A body
+           rectangle, a screen, and a 3x3 button grid drawn as small dots.
+           Sized 14x14 to match the tray icon's effective glyph size. */
+        const calcSvg =
+            "<svg width='14' height='14' viewBox='0 0 14 14' " +
+            "xmlns='http://www.w3.org/2000/svg' style='display:block'>" +
+                "<rect x='2' y='1' width='10' height='12' rx='1.5' " +
+                "fill='none' stroke='currentColor' stroke-width='1'/>" +
+                "<rect x='3.2' y='2.4' width='7.6' height='2.2' rx='0.4' " +
+                "fill='currentColor' opacity='0.75'/>" +
+                "<circle cx='4'   cy='6.6'  r='0.6' fill='currentColor'/>" +
+                "<circle cx='7'   cy='6.6'  r='0.6' fill='currentColor'/>" +
+                "<circle cx='10'  cy='6.6'  r='0.6' fill='currentColor'/>" +
+                "<circle cx='4'   cy='8.8'  r='0.6' fill='currentColor'/>" +
+                "<circle cx='7'   cy='8.8'  r='0.6' fill='currentColor'/>" +
+                "<circle cx='10'  cy='8.8'  r='0.6' fill='currentColor'/>" +
+                "<circle cx='4'   cy='11'   r='0.6' fill='currentColor'/>" +
+                "<circle cx='7'   cy='11'   r='0.6' fill='currentColor'/>" +
+                "<circle cx='10'  cy='11'   r='0.6' fill='currentColor'/>" +
+            "</svg>";
+
         service_taskbar_register_tray_app({
             appName: "calc",
             label:   "Calc",
-            icon:    "🧮",
-            title:   "Calc",
+            icon:    calcSvg,
+            title:   "Calculator",
             onClick: (btn) => {
                 if (!calcContainer) component_calc_create();
                 calcServiceWindow._toggleFromTray(btn);
@@ -2463,6 +2491,10 @@ function handle_kiosk() {
 // the editor's "E") calls:
 //
 //     framework_launcher_register("E", () => { ... open my thing ... });
+//     framework_launcher_register("E", () => { ... }, {
+//         icon:  "<svg>...</svg>" | "E",        // HTML or text glyph
+//         title: "Editor — code scratchpad"     // tooltip / secondary line
+//     });
 //
 // Multiple registrations stack vertically in the bottom-left corner — each
 // new button sits one slot above the previous one. The registry owns all
@@ -2476,7 +2508,9 @@ const FRAMEWORK_LAUNCHER_LEFT = 10;        // px from viewport left
 
 let _framework_launcher_count = 0;
 
-function framework_launcher_register_simple(textContent, onlaunch) {
+function framework_launcher_register_simple(textContent, onlaunch, opts) {
+
+    opts = opts || {};
 
     const slotIndex = _framework_launcher_count;
     _framework_launcher_count++;
@@ -2486,7 +2520,15 @@ function framework_launcher_register_simple(textContent, onlaunch) {
 
     const btn = document.createElement("button");
 
-    btn.textContent = textContent;
+    /* Prefer icon over textContent. icon may be inline HTML (e.g. an SVG)
+       or plain text. Fall back to textContent when no icon is provided so
+       existing two-arg callers still work. */
+    if (opts.icon) {
+        btn.innerHTML = opts.icon;
+    } else {
+        btn.textContent = textContent;
+    }
+    if (opts.title) btn.title = opts.title;
 
     Object.assign(btn.style, {
         position: "fixed",
@@ -2500,7 +2542,10 @@ function framework_launcher_register_simple(textContent, onlaunch) {
         border: "1px solid #444",
         borderRadius: "6px",
         cursor: "pointer",
-        fontWeight: "bold"
+        fontWeight: "bold",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center"
     });
 
     btn.onclick = () => {
@@ -2513,15 +2558,21 @@ function framework_launcher_register_simple(textContent, onlaunch) {
     document.body.appendChild(btn);
 }
 
-function framework_launcher_register_kdeubuntu(textContent, onlaunch) {
-    framework_launcher_kdeubuntu_register(textContent, onlaunch);
+function framework_launcher_register_kdeubuntu(textContent, onlaunch, opts) {
+    framework_launcher_kdeubuntu_register(textContent, onlaunch, opts);
 }
 
 /* Public API for components to register launcher buttons. Switches between the
-   simple stacked-button style and the KDE/Ubuntu-style desktop shell. */
+   simple stacked-button style and the KDE/Ubuntu-style desktop shell.
 
-function framework_launcher_register(textContent, onlaunch) {
-    framework_launcher_register_kdeubuntu(textContent, onlaunch);
+   `opts` (optional):
+     icon  — inline HTML (e.g. an <svg>) or text glyph for the button face.
+             If omitted, `textContent` is used as the face.
+     title — tooltip / accessible name. Also used as a secondary line in
+             the kdeubuntu Start menu when present and different from the
+             primary label. */
+function framework_launcher_register(textContent, onlaunch, opts) {
+    framework_launcher_register_kdeubuntu(textContent, onlaunch, opts);
 }
 
 // ===== src/framework_launcher_kdeubuntu.js =====
@@ -2535,10 +2586,10 @@ function framework_launcher_register(textContent, onlaunch) {
 // framework_launcher.js delegates to.
 // -----------------------------------------------------------------------------
 
-function framework_launcher_kdeubuntu_register(textContent, onlaunch) {
+function framework_launcher_kdeubuntu_register(textContent, onlaunch, opts) {
 
     service_taskbar_init();
-    service_taskbar_register_app(textContent, onlaunch);
+    service_taskbar_register_app(textContent, onlaunch, opts);
 }
 
 // ===== src/framework_orphan_cleanup.js =====
@@ -3574,8 +3625,14 @@ function service_taskbar_init() {
     });
 }
 
-function service_taskbar_register_app(label, onlaunch) {
-    _taskbar_apps.push({ label, onlaunch });
+function service_taskbar_register_app(label, onlaunch, opts) {
+    opts = opts || {};
+    _taskbar_apps.push({
+        label:    label,
+        onlaunch: onlaunch,
+        icon:     opts.icon  || null,
+        title:    opts.title || null
+    });
     _service_taskbar_rebuild_start_list("");
 }
 
@@ -4055,9 +4112,12 @@ function _service_taskbar_rebuild_start_list(filter) {
     matches.forEach(app => {
         const entry = document.createElement("button");
         entry.dataset.appEntry = "1";
-        entry.textContent = app.label;
+        if (app.title) entry.title = app.title;
+
         Object.assign(entry.style, {
-            display: "block",
+            display: "flex",
+            alignItems: "center",
+            gap: "10px",
             width: "100%",
             textAlign: "left",
             background: "transparent",
@@ -4068,6 +4128,73 @@ function _service_taskbar_rebuild_start_list(filter) {
             fontSize: "13px",
             fontFamily: "inherit"
         });
+
+        /* Icon slot — fixed 22px square so labels align across rows whether
+           or not an icon was supplied. Falls back to the first character of
+           the label, styled like a tile, so registrations that didn't pass
+           an icon still get a consistent look. Emoji-friendly font stack
+           and a slightly larger font size since the typical icon is an
+           emoji glyph. */
+        const iconEl = document.createElement("span");
+        Object.assign(iconEl.style, {
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: "22px",
+            height: "22px",
+            flexShrink: "0",
+            fontSize: "16px",
+            lineHeight: "1",
+            color: "#cfd2d8",
+            fontFamily: "'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', system-ui, sans-serif"
+        });
+        if (app.icon) {
+            iconEl.innerHTML = app.icon;
+        } else {
+            iconEl.textContent = (app.label || "?").charAt(0);
+            iconEl.style.background = "rgba(255,255,255,0.10)";
+            iconEl.style.borderRadius = "4px";
+            iconEl.style.fontSize = "13px";
+            iconEl.style.fontWeight = "bold";
+        }
+        entry.appendChild(iconEl);
+
+        /* Text stack — primary label on top; if a `title` was supplied AND
+           it differs from the label, show it as a dim second line for
+           context (similar to Windows/KDE start-menu app summaries). */
+        const textWrap = document.createElement("span");
+        Object.assign(textWrap.style, {
+            display: "flex",
+            flexDirection: "column",
+            minWidth: "0",
+            flex: "1"
+        });
+
+        const primary = document.createElement("span");
+        primary.textContent = app.label;
+        Object.assign(primary.style, {
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis"
+        });
+        textWrap.appendChild(primary);
+
+        if (app.title && app.title !== app.label) {
+            const secondary = document.createElement("span");
+            secondary.textContent = app.title;
+            Object.assign(secondary.style, {
+                fontSize: "11px",
+                color: "#9aa0aa",
+                marginTop: "1px",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis"
+            });
+            textWrap.appendChild(secondary);
+        }
+
+        entry.appendChild(textWrap);
+
         entry.onmouseover = () => { entry.style.background = "rgba(255,255,255,0.08)"; };
         entry.onmouseout  = () => { entry.style.background = "transparent"; };
         entry.onclick = () => {
@@ -4254,7 +4381,9 @@ function service_taskbar_register_tray_icon(opts) {
     if (!_taskbar_tray_el) return null;
 
     const btn = document.createElement("button");
-    btn.textContent = opts.icon || "?";
+    /* Accept either inline HTML (e.g. an SVG) or a plain text/emoji glyph
+       — innerHTML handles both. Falls back to "?" when no icon is given. */
+    btn.innerHTML = opts.icon || "?";
     if (opts.title) btn.title = opts.title;
 
     Object.assign(btn.style, {
@@ -4264,9 +4393,12 @@ function service_taskbar_register_tray_icon(opts) {
         borderRadius: "3px",
         cursor: "pointer",
         padding: "2px 7px",
-        fontSize: "13px",
-        fontWeight: "bold",
-        fontFamily: "inherit",
+        /* 15px so emoji icons (the typical case) read clearly. Plain
+           text glyphs at this size still look correct on a 26px button. */
+        fontSize: "15px",
+        fontWeight: "normal",
+        fontFamily: "'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', system-ui, sans-serif",
+        lineHeight: "1",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",

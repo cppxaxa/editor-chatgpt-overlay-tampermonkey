@@ -8,8 +8,8 @@
 // framework_launcher.js delegates to.
 // -----------------------------------------------------------------------------
 
-function framework_launcher_kdeubuntu_register(textContent, onlaunch) {
+function framework_launcher_kdeubuntu_register(textContent, onlaunch, opts) {
 
     service_taskbar_init();
-    service_taskbar_register_app(textContent, onlaunch);
+    service_taskbar_register_app(textContent, onlaunch, opts);
 }

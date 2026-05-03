@@ -90,11 +90,33 @@ function component_calc_handle_init() {
     ServiceWindow.registerApp("calc", component_calc_launch);
 
     if (typeof service_taskbar_register_tray_app === "function") {
+        /* Inline SVG calculator: 14x14 viewBox, currentColor strokes so it
+           inherits the tray's text colour (and updates on hover). A body
+           rectangle, a screen, and a 3x3 button grid drawn as small dots.
+           Sized 14x14 to match the tray icon's effective glyph size. */
+        const calcSvg =
+            "<svg width='14' height='14' viewBox='0 0 14 14' " +
+            "xmlns='http://www.w3.org/2000/svg' style='display:block'>" +
+                "<rect x='2' y='1' width='10' height='12' rx='1.5' " +
+                "fill='none' stroke='currentColor' stroke-width='1'/>" +
+                "<rect x='3.2' y='2.4' width='7.6' height='2.2' rx='0.4' " +
+                "fill='currentColor' opacity='0.75'/>" +
+                "<circle cx='4'   cy='6.6'  r='0.6' fill='currentColor'/>" +
+                "<circle cx='7'   cy='6.6'  r='0.6' fill='currentColor'/>" +
+                "<circle cx='10'  cy='6.6'  r='0.6' fill='currentColor'/>" +
+                "<circle cx='4'   cy='8.8'  r='0.6' fill='currentColor'/>" +
+                "<circle cx='7'   cy='8.8'  r='0.6' fill='currentColor'/>" +
+                "<circle cx='10'  cy='8.8'  r='0.6' fill='currentColor'/>" +
+                "<circle cx='4'   cy='11'   r='0.6' fill='currentColor'/>" +
+                "<circle cx='7'   cy='11'   r='0.6' fill='currentColor'/>" +
+                "<circle cx='10'  cy='11'   r='0.6' fill='currentColor'/>" +
+            "</svg>";
+
         service_taskbar_register_tray_app({
             appName: "calc",
             label:   "Calc",
-            icon:    "🧮",
-            title:   "Calc",
+            icon:    calcSvg,
+            title:   "Calculator",
             onClick: (btn) => {
                 if (!calcContainer) component_calc_create();
                 calcServiceWindow._toggleFromTray(btn);
