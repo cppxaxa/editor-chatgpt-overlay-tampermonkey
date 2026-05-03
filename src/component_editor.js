@@ -30,7 +30,7 @@ function attachEditorKeydown(ta) {
             if (e.key.toLowerCase() === "z") {
                 e.preventDefault();
                 editorUndoRedoStack.doUndo(textarea);
-                if (windowMode === "maximized") {
+                if (editorServiceWindow.mode === "maximized") {
                     const lines = textarea.value.split("\n");
                     const lpc = getLinesPerCol();
                     syncing = true;
@@ -43,7 +43,7 @@ function attachEditorKeydown(ta) {
             if (e.key.toLowerCase() === "y") {
                 e.preventDefault();
                 editorUndoRedoStack.doRedo(textarea);
-                if (windowMode === "maximized") {
+                if (editorServiceWindow.mode === "maximized") {
                     const lines = textarea.value.split("\n");
                     const lpc = getLinesPerCol();
                     syncing = true;

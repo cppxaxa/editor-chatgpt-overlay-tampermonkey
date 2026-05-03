@@ -178,7 +178,7 @@ function handleCodeCheck() {
     const isEditor = (activeTA === textarea || activeTA === leftTA || activeTA === rightTA);
     if (!isEditor && !lastFocusedTA) return;
 
-    if (windowMode === "maximized") {
+    if (editorServiceWindow.mode === "maximized") {
         clearAllMarkers(leftTA);
         clearAllMarkers(rightTA);
         redistributeColumns();
@@ -186,7 +186,7 @@ function handleCodeCheck() {
         clearAllMarkers(textarea);
     }
 
-    const code = windowMode === "maximized"
+    const code = editorServiceWindow.mode === "maximized"
         ? mergeColumnContent().trim()
         : textarea.value.trim();
 
@@ -200,7 +200,7 @@ function handleCodeCheck() {
     if (hash === checkCache.hash && checkCache.parsed) {
         showResultDialog("Code Check Result (cached)", checkCache.body);
         if (checkCache.parsed.markers && checkCache.parsed.markers.length) {
-            if (windowMode === "maximized") {
+            if (editorServiceWindow.mode === "maximized") {
                 textarea.value = mergeColumnContent();
                 insertMarkers(textarea, checkCache.parsed.markers);
                 const lines = textarea.value.split("\n");
@@ -270,7 +270,7 @@ function handleCodeCheck() {
 
         if (parsed.markers && parsed.markers.length) {
 
-            if (windowMode === "maximized") {
+            if (editorServiceWindow.mode === "maximized") {
                 textarea.value = mergeColumnContent();
                 insertMarkers(textarea, parsed.markers);
                 const lines = textarea.value.split("\n");
@@ -406,7 +406,7 @@ function attachEditorKeydown(ta) {
             if (e.key.toLowerCase() === "z") {
                 e.preventDefault();
                 editorUndoRedoStack.doUndo(textarea);
-                if (windowMode === "maximized") {
+                if (editorServiceWindow.mode === "maximized") {
                     const lines = textarea.value.split("\n");
                     const lpc = getLinesPerCol();
                     syncing = true;
@@ -419,7 +419,7 @@ function attachEditorKeydown(ta) {
             if (e.key.toLowerCase() === "y") {
                 e.preventDefault();
                 editorUndoRedoStack.doRedo(textarea);
-                if (windowMode === "maximized") {
+                if (editorServiceWindow.mode === "maximized") {
                     const lines = textarea.value.split("\n");
                     const lpc = getLinesPerCol();
                     syncing = true;
@@ -518,7 +518,7 @@ function component_kiosk() {
           Falls back to inlining the same state transitions performed by
           maxBtn.onclick in component_window.js if the button can't be
           found (e.g. future markup changes). */
-    if (windowMode !== "maximized") {
+    if (editorServiceWindow.mode !== "maximized") {
         const maxBtn = container.querySelector
             ? Array.from(container.querySelectorAll("button"))
                 .find(b => b.textContent === "□")
@@ -527,7 +527,7 @@ function component_kiosk() {
         if (maxBtn) {
             maxBtn.click();
         } else {
-            previousBounds = {
+            editorServiceWindow.previousBounds = {
                 left: container.style.left,
                 top: container.style.top,
                 width: container.style.width,
@@ -538,14 +538,14 @@ function component_kiosk() {
             container.style.width = "100vw";
             container.style.height = "100vh";
             if (resizeHandle) resizeHandle.style.display = "none";
-            windowMode = "maximized";
+            editorServiceWindow.mode = "maximized";
             if (activeTab === "editor") enterMaximizedColumnLayout();
         }
     }
 
     /* If we ended up maximized (just now or already), re-split the columns
        since the launcher path does the same when restoring. */
-    if (windowMode === "maximized") redistributeColumns();
+    if (editorServiceWindow.mode === "maximized") redistributeColumns();
 }
 
 // ===== src/component_linecommand.js =====
@@ -580,7 +580,7 @@ function handleLineAction() {
     const editorTA = isEditor ? activeTA : lastFocusedTA;
     if (!editorTA) return;
 
-    const ta = (windowMode === "maximized") ? editorTA : textarea;
+    const ta = (editorServiceWindow.mode === "maximized") ? editorTA : textarea;
 
     const cursor = ta.selectionStart;
     const text = ta.value;
@@ -605,7 +605,7 @@ function handleLineAction() {
 
         ta.dispatchEvent(new Event("input"));
         localStorage.setItem("tm_editor_content",
-            windowMode === "maximized" ? mergeColumnContent() : textarea.value);
+            editorServiceWindow.mode === "maximized" ? mergeColumnContent() : textarea.value);
     };
 
     const onstart = (ctx) => {
@@ -623,14 +623,14 @@ function handleLineAction() {
 
         const prompt = trimmed.substring(3);
 
-        const fullContent = windowMode === "maximized"
+        const fullContent = editorServiceWindow.mode === "maximized"
             ? mergeColumnContent()
             : textarea.value;
 
         const allLines = fullContent.split("\n");
 
         let cmdLineIdx = text.substring(0, start).split("\n").length - 1;
-        if (windowMode === "maximized" && ta === rightTA) {
+        if (editorServiceWindow.mode === "maximized" && ta === rightTA) {
             cmdLineIdx += leftTA.value.split("\n").length;
         }
         const cmdLineNum = cmdLineIdx + 1;
@@ -994,28 +994,14 @@ function simpleHash(str) {
 }
 
 function getEditorContent() {
-    if (windowMode === "maximized") {
+    if (editorServiceWindow.mode === "maximized") {
         return mergeColumnContent();
     }
     return textarea.value;
 }
 
 function updateTabStyles() {
-    [editorTabBtn, asciiTabBtn, questionTabBtn, snippetsTabBtn, spreviewTabBtn].forEach(btn => {
-        btn.style.color = "#999";
-        btn.style.borderBottomColor = "transparent";
-    });
-    const active = {
-        editor: editorTabBtn,
-        ascii: asciiTabBtn,
-        question: questionTabBtn,
-        snippets: snippetsTabBtn,
-        spreview: spreviewTabBtn
-    }[activeTab];
-    if (active) {
-        active.style.color = "white";
-        active.style.borderBottomColor = "#4fc3f7";
-    }
+    if (editorServiceWindow) editorServiceWindow.setActiveTabHighlight(activeTab);
 }
 
 function getTabTA(tab) {
@@ -1091,7 +1077,7 @@ function switchTab(tabName) {
         snippetsTA.style.display = "none";
         spreviewFrame.style.display = "none";
 
-        if (windowMode === "maximized") {
+        if (editorServiceWindow.mode === "maximized") {
             columnContainer.style.display = "flex";
             (lastFocusedTA || leftTA).focus();
             restoreTabState("editor");
@@ -1297,8 +1283,7 @@ let container;
 let textarea;
 let resizeHandle;
 let headerEl;
-let windowMode = "normal";
-let previousBounds = null;
+let editorServiceWindow = null;
 
 /* ---- Framework lifecycle reactors ----
    Called by the matching framework_on_*() hook in framework.js. The framework
@@ -1313,209 +1298,84 @@ function component_window_launch() {
 function component_window_handle_launcher_registered() {
     /* If restored as maximized, the initial split happened before the
        container was visible (offsetHeight was 0). Re-split now. */
-    if (windowMode === "maximized") redistributeColumns();
+    if (editorServiceWindow && editorServiceWindow.mode === "maximized") redistributeColumns();
 }
 
 function component_window_handle_window_resized() {
-    if (windowMode === "maximized") redistributeColumns();
+    if (editorServiceWindow && editorServiceWindow.mode === "maximized") redistributeColumns();
 }
 
 function createEditor() {
 
-    container = document.createElement("div");
-
-    Object.assign(container.style, {
-        position: "fixed",
-        width: "500px",
-        height: "350px",
-        background: "#1e1e1e",
-        border: "1px solid #333",
-        borderRadius: "8px",
-        zIndex: "999999",
-        display: "none",
-        flexDirection: "column",
-        boxShadow: "0 10px 30px rgba(0,0,0,.5)",
-        overflow: "hidden"
+    editorServiceWindow = new ServiceWindow();
+    editorServiceWindow.create({
+        width:  500,
+        height: 350,
+        isDraggable: () => editorServiceWindow.mode !== "maximized",
+        isResizable: () => editorServiceWindow.mode === "normal",
+        onDragEnd:   saveEditorState,
+        onResizeEnd: saveEditorState
     });
 
-    const header = document.createElement("div");
-    headerEl = header;
+    container    = editorServiceWindow.container;
+    headerEl     = editorServiceWindow.headerEl;
+    resizeHandle = editorServiceWindow.resizeHandle;
 
-    Object.assign(header.style, {
-        height: "36px",
-        background: "#2a2a2a",
-        color: "white",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        padding: "0 10px",
-        cursor: "move",
-        fontSize: "13px"
-    });
+    const header   = headerEl;
+    const minBtn   = editorServiceWindow.minBtn;
+    const maxBtn   = editorServiceWindow.maxBtn;
+    const closeBtn = editorServiceWindow.closeBtn;
 
-    /* Tab bar */
+    /* Tab bar — buttons constructed via ServiceWindow.registerTab. The
+       resulting button refs are kept in the legacy globals because tabbar
+       state restoration (updateTabStyles) and Alt+1..5 hotkeys still read
+       them. */
 
-    const tabBar = document.createElement("div");
-    tabBar.className = "tm-tab-bar";
-    Object.assign(tabBar.style, {
-        display: "flex",
-        gap: "0",
-        flexShrink: "0"
-    });
-
-    editorTabBtn = document.createElement("button");
-    editorTabBtn.textContent = "Editor";
-
-    asciiTabBtn = document.createElement("button");
-    asciiTabBtn.textContent = "Ascii design";
-
-    questionTabBtn = document.createElement("button");
-    questionTabBtn.textContent = "Question";
-
-    snippetsTabBtn = document.createElement("button");
-    snippetsTabBtn.textContent = "Snippets";
-
-    spreviewTabBtn = document.createElement("button");
-    spreviewTabBtn.textContent = "S-Preview";
-
-    [editorTabBtn, asciiTabBtn, questionTabBtn, snippetsTabBtn, spreviewTabBtn].forEach(btn => {
-        Object.assign(btn.style, {
-            background: "transparent",
-            color: "#999",
-            border: "none",
-            borderBottom: "2px solid transparent",
-            padding: "4px 10px",
-            cursor: "pointer",
-            fontSize: "12px",
-            fontFamily: "inherit"
-        });
-    });
-
-    editorTabBtn.title = "Alt+1";
-    asciiTabBtn.title = "Alt+2";
-    questionTabBtn.title = "Alt+3";
-    snippetsTabBtn.title = "Alt+4";
-    spreviewTabBtn.title = "Alt+5";
-
-    editorTabBtn.style.color = "white";
-    editorTabBtn.style.borderBottomColor = "#4fc3f7";
-
-    editorTabBtn.onclick    = (e) => { e.stopPropagation(); switchTab("editor"); };
-    asciiTabBtn.onclick     = (e) => { e.stopPropagation(); switchTab("ascii"); };
-    questionTabBtn.onclick  = (e) => { e.stopPropagation(); switchTab("question"); };
-    snippetsTabBtn.onclick  = (e) => { e.stopPropagation(); switchTab("snippets"); };
-    spreviewTabBtn.onclick  = (e) => { e.stopPropagation(); switchTab("spreview"); };
-
-    tabBar.appendChild(editorTabBtn);
-    tabBar.appendChild(asciiTabBtn);
-    tabBar.appendChild(questionTabBtn);
-    tabBar.appendChild(snippetsTabBtn);
-    tabBar.appendChild(spreviewTabBtn);
-    header.appendChild(tabBar);
+    editorTabBtn   = editorServiceWindow.registerTab({ id: "editor",   label: "Editor",       title: "Alt+1", onClick: switchTab });
+    asciiTabBtn    = editorServiceWindow.registerTab({ id: "ascii",    label: "Ascii design", title: "Alt+2", onClick: switchTab });
+    questionTabBtn = editorServiceWindow.registerTab({ id: "question", label: "Question",     title: "Alt+3", onClick: switchTab });
+    snippetsTabBtn = editorServiceWindow.registerTab({ id: "snippets", label: "Snippets",     title: "Alt+4", onClick: switchTab });
+    spreviewTabBtn = editorServiceWindow.registerTab({ id: "spreview", label: "S-Preview",    title: "Alt+5", onClick: switchTab });
 
     /* Action buttons */
 
-    const actionBtns = document.createElement("div");
-    actionBtns.className = "tm-action-btns";
-    Object.assign(actionBtns.style, {
-        display: "flex",
-        gap: "4px",
-        marginLeft: "10px",
-        alignItems: "center"
+    editorServiceWindow.registerAction({
+        label: "↻",
+        title: "Regenerate Ascii/Question/Snippets (Alt+R)",
+        onClick: regenerateCurrentTab,
+        style: {
+            background: "#555", color: "white", border: "none",
+            borderRadius: "3px", padding: "2px 8px",
+            cursor: "pointer", fontSize: "13px"
+        }
     });
 
-    const runBtn = document.createElement("button");
-    runBtn.textContent = "Command";
-    runBtn.title = "Execute line command (Alt+I)";
-
-    const checkBtn = document.createElement("button");
-    checkBtn.textContent = "Check";
-    checkBtn.title = "Code check (Alt+C)";
-
-    [runBtn, checkBtn].forEach(btn => {
-        Object.assign(btn.style, {
-            background: "#555",
-            color: "white",
-            border: "none",
-            borderRadius: "3px",
-            padding: "2px 8px",
-            cursor: "pointer",
-            fontSize: "11px"
-        });
+    editorServiceWindow.registerAction({
+        label: "Command",
+        title: "Execute line command (Alt+I)",
+        onClick: handleLineAction
     });
 
-    runBtn.onclick   = (e) => { e.stopPropagation(); handleLineAction(); };
-    checkBtn.onclick = (e) => { e.stopPropagation(); handleCodeCheck(); };
-
-    const ghBtn = document.createElement("button");
-    ghBtn.title = "Project page on GitHub";
-    ghBtn.innerHTML = '<svg viewBox="0 0 16 16" width="12" height="12" fill="white"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>';
-
-    Object.assign(ghBtn.style, {
-        background: "#555",
-        color: "white",
-        border: "none",
-        borderRadius: "3px",
-        padding: "3px 6px",
-        cursor: "pointer",
-        display: "flex",
-        alignItems: "center"
+    editorServiceWindow.registerAction({
+        label: "Check",
+        title: "Code check (Alt+C)",
+        onClick: handleCodeCheck
     });
 
-    ghBtn.onclick = (e) => {
-        e.stopPropagation();
-        window.open("https://github.com/cppxaxa/editor-chatgpt-overlay-tampermonkey", "_blank");
-    };
-
-    const regenBtn = document.createElement("button");
-    regenBtn.textContent = "↻";
-    regenBtn.title = "Regenerate Ascii/Question/Snippets (Alt+R)";
-
-    Object.assign(regenBtn.style, {
-        background: "#555",
-        color: "white",
-        border: "none",
-        borderRadius: "3px",
-        padding: "2px 8px",
-        cursor: "pointer",
-        fontSize: "13px"
+    editorServiceWindow.registerAction({
+        title: "Project page on GitHub",
+        html: '<svg viewBox="0 0 16 16" width="12" height="12" fill="white"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>',
+        onClick: () => window.open("https://github.com/cppxaxa/editor-chatgpt-overlay-tampermonkey", "_blank"),
+        style: {
+            background: "#555", color: "white", border: "none",
+            borderRadius: "3px", padding: "3px 6px",
+            cursor: "pointer", display: "flex", alignItems: "center"
+        }
     });
 
-    regenBtn.onclick = (e) => { e.stopPropagation(); regenerateCurrentTab(); };
-
-    actionBtns.appendChild(regenBtn);
-    actionBtns.appendChild(runBtn);
-    actionBtns.appendChild(checkBtn);
-    actionBtns.appendChild(ghBtn);
-    header.appendChild(actionBtns);
-
-    /* Window control buttons */
-
-    const buttons = document.createElement("div");
-
-    const minBtn = document.createElement("button");
-    minBtn.textContent = "—";
-
-    const maxBtn = document.createElement("button");
-    maxBtn.textContent = "□";
-
-    const closeBtn = document.createElement("button");
-    closeBtn.textContent = "×";
-
-    [minBtn, maxBtn, closeBtn].forEach(btn => {
-        Object.assign(btn.style, {
-            marginLeft: "6px",
-            background: "#444",
-            color: "white",
-            border: "none",
-            width: "24px",
-            height: "24px",
-            cursor: "pointer"
-        });
-        buttons.appendChild(btn);
-    });
-
-    header.appendChild(buttons);
+    /* Append window control cluster (min/max/close) after the editor's own
+       header content so it lands at the right edge of the header. */
+    editorServiceWindow.appendControls();
 
     /* Main editor textarea */
 
@@ -1552,7 +1412,6 @@ function createEditor() {
 
     attachEditorKeydown(textarea);
 
-    container.appendChild(header);
     container.appendChild(textarea);
 
     /* Column layout for maximized mode */
@@ -1608,7 +1467,7 @@ function createEditor() {
 
     leftTA.addEventListener("keydown", (e) => {
 
-        if (windowMode !== "maximized") return;
+        if (editorServiceWindow.mode !== "maximized") return;
 
         if (e.key === "ArrowDown") {
             const val = leftTA.value;
@@ -1624,7 +1483,7 @@ function createEditor() {
 
     rightTA.addEventListener("keydown", (e) => {
 
-        if (windowMode !== "maximized") return;
+        if (editorServiceWindow.mode !== "maximized") return;
         const cur = rightTA.selectionStart;
 
         if (e.key === "ArrowUp") {
@@ -1719,10 +1578,6 @@ function createEditor() {
     try { const c = localStorage.getItem(SNIPPETS_CACHE_KEY); if (c) snippetsCache = JSON.parse(c); } catch (e) {}
     try { const c = localStorage.getItem(SPREVIEW_CACHE_KEY); if (c) spreviewCache = JSON.parse(c); } catch (e) {}
 
-    createResizeHandle();
-
-    document.body.appendChild(container);
-
     const restored = restoreEditorState();
     if (!restored) centerEditor();
 
@@ -1730,7 +1585,7 @@ function createEditor() {
 
     minBtn.onclick = () => {
 
-        if (windowMode === "minimized") {
+        if (editorServiceWindow.mode === "minimized") {
 
             if (activeTab === "ascii") {
                 asciiTA.style.display = "block"; asciiTA.focus();
@@ -1743,24 +1598,24 @@ function createEditor() {
             } else {
                 textarea.style.display = "block";
             }
-            if (previousBounds) {
-                container.style.left = previousBounds.left;
-                container.style.top = previousBounds.top;
-                container.style.width = previousBounds.width;
-                container.style.height = previousBounds.height;
+            if (editorServiceWindow.previousBounds) {
+                container.style.left   = editorServiceWindow.previousBounds.left;
+                container.style.top    = editorServiceWindow.previousBounds.top;
+                container.style.width  = editorServiceWindow.previousBounds.width;
+                container.style.height = editorServiceWindow.previousBounds.height;
             } else {
                 container.style.height = "350px";
             }
             resizeHandle.style.display = "block";
-            windowMode = "normal";
+            editorServiceWindow.mode = "normal";
         }
         else {
 
-            if (windowMode === "maximized" && activeTab === "editor") {
+            if (editorServiceWindow.mode === "maximized" && activeTab === "editor") {
                 exitMaximizedColumnLayout();
             }
 
-            previousBounds = {
+            editorServiceWindow.previousBounds = {
                 left: container.style.left,
                 top: container.style.top,
                 width: container.style.width,
@@ -1776,7 +1631,7 @@ function createEditor() {
             resizeHandle.style.display = "none";
             container.style.height = "36px";
 
-            windowMode = "minimized";
+            editorServiceWindow.mode = "minimized";
         }
 
         saveEditorState();
@@ -1784,9 +1639,9 @@ function createEditor() {
 
     maxBtn.onclick = () => {
 
-        if (windowMode !== "maximized") {
+        if (editorServiceWindow.mode !== "maximized") {
 
-            previousBounds = {
+            editorServiceWindow.previousBounds = {
                 left: container.style.left,
                 top: container.style.top,
                 width: container.style.width,
@@ -1800,148 +1655,58 @@ function createEditor() {
 
             resizeHandle.style.display = "none";
 
-            windowMode = "maximized";
+            editorServiceWindow.mode = "maximized";
             if (activeTab === "editor") enterMaximizedColumnLayout();
         }
         else {
 
             if (activeTab === "editor") exitMaximizedColumnLayout();
 
-            if (previousBounds) {
-                container.style.left = previousBounds.left;
-                container.style.top = previousBounds.top;
-                container.style.width = previousBounds.width;
-                container.style.height = previousBounds.height;
+            if (editorServiceWindow.previousBounds) {
+                container.style.left   = editorServiceWindow.previousBounds.left;
+                container.style.top    = editorServiceWindow.previousBounds.top;
+                container.style.width  = editorServiceWindow.previousBounds.width;
+                container.style.height = editorServiceWindow.previousBounds.height;
             }
 
             resizeHandle.style.display = "block";
-            windowMode = "normal";
+            editorServiceWindow.mode = "normal";
         }
 
         saveEditorState();
     };
 
     closeBtn.onclick = () => container.style.display = "none";
-
-    makeDraggable(container, header);
-}
-
-/* ---- Resize handle ---- */
-
-function createResizeHandle() {
-
-    resizeHandle = document.createElement("div");
-
-    Object.assign(resizeHandle.style, {
-        position: "absolute",
-        width: "14px",
-        height: "14px",
-        right: "0",
-        bottom: "0",
-        cursor: "nwse-resize"
-    });
-
-    container.appendChild(resizeHandle);
-
-    let resizing = false;
-    let startX, startY, startWidth, startHeight;
-
-    resizeHandle.addEventListener("mousedown", (e) => {
-
-        if (windowMode !== "normal") return;
-
-        resizing = true;
-        startX = e.clientX;
-        startY = e.clientY;
-        startWidth = container.offsetWidth;
-        startHeight = container.offsetHeight;
-
-        e.preventDefault();
-    });
-
-    document.addEventListener("mousemove", (e) => {
-        if (!resizing) return;
-        const newWidth = startWidth + (e.clientX - startX);
-        const newHeight = startHeight + (e.clientY - startY);
-        container.style.width = Math.max(300, newWidth) + "px";
-        container.style.height = Math.max(150, newHeight) + "px";
-    });
-
-    document.addEventListener("mouseup", () => {
-        if (resizing) saveEditorState();
-        resizing = false;
-    });
-}
-
-/* ---- Drag ---- */
-
-function makeDraggable(element, handle) {
-
-    let isDown = false;
-    let offsetX, offsetY;
-
-    handle.addEventListener("mousedown", (e) => {
-        if (windowMode === "maximized") return;
-        isDown = true;
-        offsetX = e.clientX - element.offsetLeft;
-        offsetY = e.clientY - element.offsetTop;
-    });
-
-    document.addEventListener("mouseup", () => {
-        if (isDown) saveEditorState();
-        isDown = false;
-    });
-
-    document.addEventListener("mousemove", (e) => {
-        if (!isDown || windowMode === "maximized") return;
-        element.style.left = e.clientX - offsetX + "px";
-        element.style.top = e.clientY - offsetY + "px";
-    });
 }
 
 /* ---- Initial centering ---- */
 
 function centerEditor() {
-    const width = 500;
-    const height = 350;
-    container.style.left = (window.innerWidth - width) / 2 + "px";
-    container.style.top = (window.innerHeight - height) / 2 + "px";
+    service_window_center(container, 500, 350);
 }
 
-/* ---- Geometry persistence ---- */
+/* ---- Geometry persistence ----
+   Generic geometry round-trip lives in service_window.js; the editor-specific
+   side-effects (entering maximized column layout, hiding the textarea when
+   minimized) stay here because they depend on tab content elements. */
 
 function saveEditorState() {
-
-    if (!container) return;
-
-    const state = {
-        left: container.style.left,
-        top: container.style.top,
-        width: container.style.width,
-        height: container.style.height,
-        windowMode,
-        previousBounds
-    };
-
-    localStorage.setItem(EDITOR_STATE_KEY, JSON.stringify(state));
+    if (!editorServiceWindow) return;
+    service_window_persist_geometry(EDITOR_STATE_KEY, container, {
+        windowMode:     editorServiceWindow.mode,
+        previousBounds: editorServiceWindow.previousBounds
+    });
 }
 
 function restoreEditorState() {
 
-    const raw = localStorage.getItem(EDITOR_STATE_KEY);
-    if (!raw) return false;
+    const state = service_window_restore_geometry(EDITOR_STATE_KEY, container);
+    if (!state) return false;
 
-    const state = JSON.parse(raw);
+    editorServiceWindow.mode           = state.windowMode    || "normal";
+    editorServiceWindow.previousBounds = state.previousBounds || null;
 
-    container.style.left = state.left;
-    container.style.top = state.top;
-    container.style.width = state.width;
-    container.style.height = state.height;
-
-    windowMode = state.windowMode || "normal";
-    previousBounds = state.previousBounds || null;
-
-    if (windowMode === "maximized") {
+    if (editorServiceWindow.mode === "maximized") {
         container.style.left = "0";
         container.style.top = "0";
         container.style.width = "100vw";
@@ -1950,7 +1715,7 @@ function restoreEditorState() {
         enterMaximizedColumnLayout();
     }
 
-    if (windowMode === "minimized") {
+    if (editorServiceWindow.mode === "minimized") {
         textarea.style.display = "none";
         container.style.height = "36px";
         resizeHandle.style.display = "none";
@@ -2635,6 +2400,374 @@ const editorUndoRedoStack = new UndoRedoStack({
     debounceMs: 300,
     storageKey: "tm_editor_content",
 });
+
+// ===== src/service_window.js =====
+// -----------------------------------------------------------------------------
+// service_window.js — generic floating-window mechanics. No knowledge of
+// `windowMode`, tabs, or any editor-specific content. Functions are
+// parameter-driven so they can support any future ServiceWindow instance.
+//
+// Step A: skeleton class + parameter-pure utilities only. Steps B–D
+// will populate the class with .create(), .registerTab(), .registerAction(),
+// and migrate `windowMode` / `previousBounds` to instance state.
+// -----------------------------------------------------------------------------
+
+class ServiceWindow {
+
+    constructor() {
+        this.container       = null;
+        this.headerEl        = null;
+        this.tabBarEl        = null;
+        this.actionBarEl     = null;
+        this.minBtn          = null;
+        this.maxBtn          = null;
+        this.closeBtn        = null;
+        this.resizeHandle    = null;
+        this.mode            = "normal";   // "normal" | "maximized" | "minimized"
+        this.previousBounds  = null;
+        this._tabs           = [];   // [{ id, button }]
+        this._activeTabId    = null;
+    }
+
+    /* Build container + header + min/max/close + drag wiring + resize handle.
+       Does NOT wire min/max/close onclick handlers — those stay with the
+       caller in Step B because they depend on editor-specific tab content
+       state. The caller writes to .minBtn.onclick / .maxBtn.onclick /
+       .closeBtn.onclick after .create() returns.
+
+       Caller appends its own header content (tab bar, action buttons, etc.)
+       directly into .headerEl. The min/max/close cluster is appended last so
+       it stays on the right edge under `justify-content: space-between`.
+
+       opts:
+         width, height       — initial size (defaults 500/350).
+         isDraggable()       — gate for drag start.
+         isResizable()       — gate for resize start.
+         onDragEnd()         — called after drag mouseup.
+         onResizeEnd()       — called after resize mouseup.
+         minWidth, minHeight — resize floor (defaults 300/150). */
+    create(opts) {
+
+        opts = opts || {};
+        const width  = opts.width  || 500;
+        const height = opts.height || 350;
+
+        /* Container */
+        this.container = document.createElement("div");
+        Object.assign(this.container.style, {
+            position: "fixed",
+            width:  width  + "px",
+            height: height + "px",
+            background: "#1e1e1e",
+            border: "1px solid #333",
+            borderRadius: "8px",
+            zIndex: "999999",
+            display: "none",
+            flexDirection: "column",
+            boxShadow: "0 10px 30px rgba(0,0,0,.5)",
+            overflow: "hidden"
+        });
+
+        /* Header */
+        this.headerEl = document.createElement("div");
+        Object.assign(this.headerEl.style, {
+            height: "36px",
+            background: "#2a2a2a",
+            color: "white",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "0 10px",
+            cursor: "move",
+            fontSize: "13px"
+        });
+
+        this.container.appendChild(this.headerEl);
+        document.body.appendChild(this.container);
+
+        /* Tab bar (left side of header) — registerTab() appends buttons here. */
+        this.tabBarEl = document.createElement("div");
+        this.tabBarEl.className = "tm-tab-bar";
+        Object.assign(this.tabBarEl.style, {
+            display: "flex",
+            gap: "0",
+            flexShrink: "0"
+        });
+        this.headerEl.appendChild(this.tabBarEl);
+
+        /* Action bar (sits next to tab bar) — registerAction() appends here. */
+        this.actionBarEl = document.createElement("div");
+        this.actionBarEl.className = "tm-action-btns";
+        Object.assign(this.actionBarEl.style, {
+            display: "flex",
+            gap: "4px",
+            marginLeft: "10px",
+            alignItems: "center"
+        });
+        this.headerEl.appendChild(this.actionBarEl);
+
+        /* Drag */
+        service_window_make_draggable(this.container, this.headerEl, {
+            isDraggable: opts.isDraggable,
+            onDragEnd:   opts.onDragEnd
+        });
+
+        /* Resize handle */
+        this.resizeHandle = service_window_create_resize_handle(this.container, {
+            isResizable: opts.isResizable,
+            onResizeEnd: opts.onResizeEnd,
+            minWidth:    opts.minWidth,
+            minHeight:   opts.minHeight
+        });
+
+        /* Window control buttons (min / max / close) — onclick wired by caller.
+           These are NOT appended yet; caller calls .appendControls() after it
+           has populated the rest of the header so they end up last. */
+        const controls = document.createElement("div");
+        this._controlsEl = controls;
+
+        this.minBtn   = document.createElement("button"); this.minBtn.textContent   = "—";
+        this.maxBtn   = document.createElement("button"); this.maxBtn.textContent   = "□";
+        this.closeBtn = document.createElement("button"); this.closeBtn.textContent = "×";
+
+        [this.minBtn, this.maxBtn, this.closeBtn].forEach(btn => {
+            Object.assign(btn.style, {
+                marginLeft: "6px",
+                background: "#444",
+                color: "white",
+                border: "none",
+                width: "24px",
+                height: "24px",
+                cursor: "pointer"
+            });
+            controls.appendChild(btn);
+        });
+
+        return this;
+    }
+
+    /* Caller invokes this after appending its own header content so the
+       min/max/close cluster ends up at the right edge of the header. */
+    appendControls() {
+        this.headerEl.appendChild(this._controlsEl);
+    }
+
+    /* Register a tab. Adds a styled button to .tabBarEl that, when clicked,
+       calls opts.onClick(opts.id). The first registered tab is auto-styled
+       as active.
+
+       This is a UI-construction helper. It does NOT manage tab content
+       visibility — that stays with the caller's switchTab() / onClick. Use
+       setActiveTabHighlight(id) to update the button styling after a switch.
+
+       opts:
+         id     — string identifier passed back via onClick.
+         label  — button text.
+         title  — tooltip (e.g., "Alt+1").
+         onClick(id) — invoked on button click. */
+    registerTab(opts) {
+
+        const btn = document.createElement("button");
+        btn.textContent = opts.label;
+        if (opts.title) btn.title = opts.title;
+
+        Object.assign(btn.style, {
+            background: "transparent",
+            color: "#999",
+            border: "none",
+            borderBottom: "2px solid transparent",
+            padding: "4px 10px",
+            cursor: "pointer",
+            fontSize: "12px",
+            fontFamily: "inherit"
+        });
+
+        const tab = { id: opts.id, button: btn };
+
+        btn.onclick = (e) => {
+            e.stopPropagation();
+            if (opts.onClick) opts.onClick(opts.id);
+        };
+
+        this.tabBarEl.appendChild(btn);
+        this._tabs.push(tab);
+
+        if (this._activeTabId === null) {
+            this._activeTabId = opts.id;
+            btn.style.color = "white";
+            btn.style.borderBottomColor = "#4fc3f7";
+        }
+
+        return btn;
+    }
+
+    /* Update tab-button highlighting to mark `id` as the active tab.
+       Caller (switchTab) invokes this after a successful tab change. */
+    setActiveTabHighlight(id) {
+        this._activeTabId = id;
+        for (const t of this._tabs) {
+            const isActive = (t.id === id);
+            t.button.style.color = isActive ? "white" : "#999";
+            t.button.style.borderBottomColor = isActive ? "#4fc3f7" : "transparent";
+        }
+    }
+
+    activeTabId() {
+        return this._activeTabId;
+    }
+
+    /* Register an action button (sits next to the tab bar in the header).
+       opts: { label, title, onClick, html, style }
+         - pass `html` (e.g. an SVG) instead of `label` for icon buttons.
+         - `style` is an Object.assign spread; defaults to the standard pill. */
+    registerAction(opts) {
+
+        const btn = document.createElement("button");
+
+        if (opts.html) {
+            btn.innerHTML = opts.html;
+        } else {
+            btn.textContent = opts.label;
+        }
+        if (opts.title) btn.title = opts.title;
+
+        Object.assign(btn.style, opts.style || {
+            background: "#555",
+            color: "white",
+            border: "none",
+            borderRadius: "3px",
+            padding: "2px 8px",
+            cursor: "pointer",
+            fontSize: "11px"
+        });
+
+        btn.onclick = (e) => {
+            e.stopPropagation();
+            if (opts.onClick) opts.onClick();
+        };
+
+        this.actionBarEl.appendChild(btn);
+        return btn;
+    }
+}
+
+/* ---- Drag ---- */
+
+function service_window_make_draggable(element, handle, opts) {
+
+    const isDraggable = (opts && opts.isDraggable) || (() => true);
+    const onDragEnd   = (opts && opts.onDragEnd)   || (() => {});
+
+    let isDown = false;
+    let offsetX, offsetY;
+
+    handle.addEventListener("mousedown", (e) => {
+        if (!isDraggable()) return;
+        isDown = true;
+        offsetX = e.clientX - element.offsetLeft;
+        offsetY = e.clientY - element.offsetTop;
+    });
+
+    document.addEventListener("mouseup", () => {
+        if (isDown) onDragEnd();
+        isDown = false;
+    });
+
+    document.addEventListener("mousemove", (e) => {
+        if (!isDown || !isDraggable()) return;
+        element.style.left = e.clientX - offsetX + "px";
+        element.style.top  = e.clientY - offsetY + "px";
+    });
+}
+
+/* ---- Resize handle ---- */
+
+function service_window_create_resize_handle(container, opts) {
+
+    const isResizable = (opts && opts.isResizable) || (() => true);
+    const onResizeEnd = (opts && opts.onResizeEnd) || (() => {});
+    const minWidth    = (opts && opts.minWidth)    || 300;
+    const minHeight   = (opts && opts.minHeight)   || 150;
+
+    const handle = document.createElement("div");
+
+    Object.assign(handle.style, {
+        position: "absolute",
+        width: "14px",
+        height: "14px",
+        right: "0",
+        bottom: "0",
+        cursor: "nwse-resize"
+    });
+
+    container.appendChild(handle);
+
+    let resizing = false;
+    let startX, startY, startWidth, startHeight;
+
+    handle.addEventListener("mousedown", (e) => {
+        if (!isResizable()) return;
+        resizing = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        startWidth  = container.offsetWidth;
+        startHeight = container.offsetHeight;
+        e.preventDefault();
+    });
+
+    document.addEventListener("mousemove", (e) => {
+        if (!resizing) return;
+        const newWidth  = startWidth  + (e.clientX - startX);
+        const newHeight = startHeight + (e.clientY - startY);
+        container.style.width  = Math.max(minWidth,  newWidth)  + "px";
+        container.style.height = Math.max(minHeight, newHeight) + "px";
+    });
+
+    document.addEventListener("mouseup", () => {
+        if (resizing) onResizeEnd();
+        resizing = false;
+    });
+
+    return handle;
+}
+
+/* ---- Centering ---- */
+
+function service_window_center(element, width, height) {
+    element.style.left = (window.innerWidth  - width)  / 2 + "px";
+    element.style.top  = (window.innerHeight - height) / 2 + "px";
+}
+
+/* ---- Geometry persistence ---- */
+
+function service_window_persist_geometry(key, element, extras) {
+
+    if (!element) return;
+
+    const state = Object.assign({
+        left:   element.style.left,
+        top:    element.style.top,
+        width:  element.style.width,
+        height: element.style.height
+    }, extras || {});
+
+    localStorage.setItem(key, JSON.stringify(state));
+}
+
+function service_window_restore_geometry(key, element) {
+
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+
+    const state = JSON.parse(raw);
+
+    element.style.left   = state.left;
+    element.style.top    = state.top;
+    element.style.width  = state.width;
+    element.style.height = state.height;
+
+    return state;
+}
 
 // ===== src/footer.js =====
 // -----------------------------------------------------------------------------

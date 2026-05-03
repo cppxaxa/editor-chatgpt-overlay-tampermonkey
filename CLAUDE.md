@@ -21,19 +21,34 @@ build.sh / build.cmd             # one-line wrappers around `go run build.go`
 run_app.go                       # standalone launcher (chrome + DevTools injection of dist/source.js)
 appsettings.json                 # config consumed by run_app.go (chrome path, port, properties)
 dist/source.js                   # generated; the file you paste into Tampermonkey
+PLAN.md                          # ServiceWindow extraction plan (executed; kept as a record)
 src/
   header.js                      # ==UserScript== banner + IIFE open + 'use strict'
-  framework.js                   # global state + framework_init() bootstrap +
-                                 #   framework_register_launcher() (registers the "E" launcher)
+  framework.js                   # framework_init() bootstrap +
+                                 #   framework_register_launcher() (registers the "E" launcher) +
+                                 #   lifecycle hooks (framework_on_init,
+                                 #   framework_on_launcher_registered, framework_on_window_resized)
   framework_scrollbars.js        # framework-level scrollbar styling
   framework_kiosk.js             # handle_kiosk() bootstrap reader (calls component_kiosk())
   framework_launcher.js          # framework_launcher_register(text, onlaunch) — registry for
                                  #   floating bottom-left launcher buttons; multiple registrations
                                  #   stack vertically
+  service_window.js              # ServiceWindow class — generic floating-window mechanics:
+                                 #   .create(opts), .registerTab({id,label,title,onClick}),
+                                 #   .registerAction({label,title,onClick,html,style}),
+                                 #   .setActiveTabHighlight(id), .appendControls(),
+                                 #   instance state: .container, .headerEl, .tabBarEl,
+                                 #   .actionBarEl, .minBtn/.maxBtn/.closeBtn, .resizeHandle,
+                                 #   .mode ("normal"|"maximized"|"minimized"), .previousBounds.
+                                 #   Plus parameter-pure helpers: service_window_make_draggable,
+                                 #   service_window_create_resize_handle, service_window_center,
+                                 #   service_window_persist_geometry / _restore_geometry.
   component_kiosk.js             # component_kiosk() — auto-open + maximize when
                                  #   localStorage["kiosk"] === "true" (set by run_app.go)
-  component_window.js            # container/header/min/max/close + drag + resize +
-                                 #   geometry persistence + master createEditor() wiring
+  component_window.js            # editorServiceWindow (= new ServiceWindow) +
+                                 #   createEditor() that wires tabs/actions into it +
+                                 #   editor-specific min/max/close handler bodies +
+                                 #   saveEditorState / restoreEditorState
   component_editor.js            # shared keydown handling (attachEditorKeydown)
   component_columns.js           # two-column layout for maximized mode
   component_tabbar.js            # tab switching + simpleHash + getEditorContent +
@@ -64,16 +79,23 @@ src/
 
 1. `src/header.js` — always first
 2. `src/framework.js` — always second
-3. All other `src/*.js` (i.e. every `component_*.js`) — sorted alphabetically
+3. All other `src/*.js` (i.e. every `component_*.js` and `service_*.js`) — sorted alphabetically
 4. `src/footer.js` — always last
 
-Because everything ends up inside the same IIFE, **JavaScript function-declaration hoisting means source-file order does not matter at runtime**. Any component file can call any function declared in any other component file. State variables (`let`/`const`) live in `framework.js` so they are declared before any component file runs.
+Because everything ends up inside the same IIFE, **JavaScript function-declaration hoisting means source-file order does not matter at runtime**. Any component file can call any function declared in any other component file. State variables (`let`/`const`) live in the file that owns them; cross-component reads go through public function calls or instance properties (e.g. `editorServiceWindow.mode`).
 
 ### Runtime architecture (within the concatenated IIFE)
 
-- **Global state** at the top of `framework.js` — DOM refs (`container`, `textarea`, `headerEl`, `columnContainer`, `leftTA`, `rightTA`, tab buttons, tab content elements), tab system vars (`activeTab`, per-tab caches), undo/redo stacks, per-tab cursor/scroll state (`tabState`).
-- **`framework_init()`** in `footer.js` calls `framework_register_launcher() + registerLineReaderHotkey() + window.onresize + style injection + framework_scrollbars_inject() + handle_kiosk()`. This is the only entry point. `framework_register_launcher()` (also in `framework.js`) is a thin wrapper that calls `framework_launcher_register("E", ...)` to wire the editor's open-on-click behavior — extract it to its own helper so adding more launcher buttons later is a one-liner.
-- **`createEditor()`** in `component_window.js` is the master DOM builder — it constructs the floating window, header, tabs, action buttons, main textarea, two column textareas, ascii/question/snippets textareas, S-Preview iframe, and wires the min/max/close/drag/resize handlers. It is called lazily on first launcher click.
+- **`framework_init()`** in `footer.js` is the only entry point. It calls `framework_register_launcher()`, attaches `window.addEventListener("resize", framework_on_window_resized)`, runs `framework_on_init()`, then `handle_kiosk()`.
+- **Lifecycle hooks** in `framework.js` (`framework_on_init`, `framework_on_launcher_registered`, `framework_on_window_resized`) are literal lists of components that react to a framework-level moment. The framework does not reach into component state directly; instead each component exposes `component_<name>_handle_<event>()` and the hook calls it. To add a reactor, append one line to the relevant hook.
+- **`ServiceWindow` (`service_window.js`)** is a generic floating-window class. `editorServiceWindow = new ServiceWindow()` is the single instance held in `component_window.js`. The class owns:
+  - DOM construction: container `<div>`, 36px header, tab bar slot, action bar slot, min/max/close cluster, resize handle.
+  - Drag wiring (header → container) and resize wiring (resize handle → container) via parameter-pure helpers (`isDraggable()`, `isResizable()`, `onDragEnd()`, `onResizeEnd()` callbacks).
+  - Per-instance state: `.mode` ("normal" | "maximized" | "minimized"), `.previousBounds`, `.tabBarEl`, `.actionBarEl`, `.container`, `.headerEl`, `.resizeHandle`, `.minBtn`/`.maxBtn`/`.closeBtn`.
+  - Tab/action registration: `.registerTab({id,label,title,onClick})` appends a styled tab button (first registered tab is auto-highlighted); `.registerAction({label,title,onClick,html,style})` appends an action button (text or SVG icon, optional style override). `.setActiveTabHighlight(id)` updates which tab button looks active.
+  - `.appendControls()` is called by the caller after it has populated its own header content so the min/max/close cluster ends up at the right edge.
+  - The class has **no knowledge of the editor's tabs, content elements, or windowMode semantics specific to this app** — those live in the caller's onClick handlers and in `component_window.js`'s min/max/close button bodies.
+- **`createEditor()`** in `component_window.js` is the master DOM wirer: it instantiates `editorServiceWindow`, calls `.create()`, then calls `.registerTab` × 5 (Editor / Ascii / Question / Snippets / S-Preview) and `.registerAction` × 4 (↻ / Command / Check / GitHub). It then builds the editor's own content elements (main textarea, two column textareas, ascii/question/snippets textareas, S-Preview iframe), wires the min/max/close `onclick` bodies (these still know about editor-specific tab content elements), and calls `.appendControls()`. Called lazily on first launcher click.
 - **Tab system** — five tabs (Editor, Ascii design, Question, Snippets, S-Preview). Each generated tab caches `{ hash, content }` in both memory and localStorage. `simpleHash` (djb2) detects code changes; regeneration only happens when hash differs (or explicitly via Alt+R which clears the cache first).
 - **S-Preview** uses an iframe with `srcdoc` for isolated syntax-highlighted HTML rendering. `setSpreviewContent` injects a CSS reset to preserve indentation.
 - **Inline commands** — `/p <prompt>` sends prompt with full numbered editor context; `/r <prompt>` sends raw prompt. Response replaces the command line in-place. `applyIndent` normalizes indentation (strips common leading whitespace from lines 2+, since `extractCleanText` trims the first line).
@@ -88,7 +110,7 @@ Because everything ends up inside the same IIFE, **JavaScript function-declarati
   - Cancel button (`component_waitingui.js`) calls `flushLlmQueue()` then `waitAbortController.abort()`. **Tab switching does NOT cancel jobs** — generations run to completion in the background, and their `onend` writes to the cache regardless of which tab is active (the textarea-write step is gated on `activeTab === "<owner>"` so the user only sees a visible update if they're still on the relevant tab).
   - `sendMessage(prompt)` is internal — only the queue drain calls it. New code should always use `submitMessage`.
 - **Response cleaning** (`extractCleanText`) — clones response DOM, strips sticky headers/copy buttons, extracts CodeMirror content preserving line breaks, removes markdown fences. **Note:** returns trimmed text, so first line loses leading whitespace — `applyIndent` accounts for this.
-- **State persistence** — Editor content in `localStorage["tm_editor_content"]`, window geometry/mode in `localStorage["tm_editor_window_state"]`, tab caches in `localStorage["tm_ascii_cache"]` etc.
+- **State persistence** — Editor content in `localStorage["tm_editor_content"]`, window geometry/mode in `localStorage["tm_editor_window_state"]` (the JSON payload still uses the legacy field name `windowMode` for backward compat with already-saved sessions, even though the live state is now on `editorServiceWindow.mode`), tab caches in `localStorage["tm_ascii_cache"]` etc.
 
 ### Hotkeys
 
@@ -126,10 +148,11 @@ There is no test pipeline yet. To develop:
 
 ### Refactoring status
 
-This is a two-step refactor of the original monolithic `ChatGPT Floating Scratchpad.js`:
+The codebase has been through three migrations:
 
-- **Step 1 (DONE):** Split the monolith into per-component files under `src/`, with a Go concatenator that reproduces the working script. Original function names (`createEditor`, `simpleHash`, `handleLineAction`, …) are preserved so `dist/source.js` is line-for-line equivalent to the monolith. This makes diffing easy if a port introduces a regression.
-- **Step 2 (PLANNED):** Rename functions to the `framework_*` / `framework_internal_*` / `component_<name>_<suffix>()` scheme described in `PROPOSAL.md`. Each component will expose only the suffixed public interface (`_draw`, `_register_hotkeys`, `_register_events`, `_load_state`, `_save_state`, `_action_*`). State variables will move from `framework.js` into the owning component files. See `PROPOSAL.md` and `PLAN.md` for the target architecture.
+- **Step 1 (DONE):** Split the monolith `ChatGPT Floating Scratchpad.js` into per-component files under `src/`, with a Go concatenator that reproduces the working script. Original function names (`createEditor`, `simpleHash`, `handleLineAction`, …) were preserved so `dist/source.js` is line-for-line equivalent to the monolith. Diffing remains easy if a port introduces a regression.
+- **Step 2 (DONE):** Introduced framework lifecycle hooks (`framework_on_*`) so the framework no longer reaches into component state. Each component now exposes `component_<name>_handle_<event>()` reactors that the hook calls. Component init work (e.g. `component_waitingui_handle_init`, `component_linecommand_handle_init`) was moved out of `framework.js`.
+- **Step 3 (DONE — see `PLAN.md`):** Extracted generic floating-window mechanics into a `ServiceWindow` class (`src/service_window.js`). The window component now instantiates `editorServiceWindow = new ServiceWindow()`, registers tabs and actions through it, and stores `mode`/`previousBounds` as instance properties. `component_window.js` shrank from ~680 lines of mixed concerns to ~470 lines focused on editor-specific wiring. A second floating window in the future is `new ServiceWindow({...}); .create(); .registerTab(...)`.
 
 When working on this codebase, prefer **editing the per-component files under `src/`**, not the legacy monolith. Run the build after every meaningful change.
 
@@ -201,8 +224,8 @@ The minimal WebSocket client supports only what's needed: TCP `ws://`, single ma
 
 `framework_init()` calls `handle_kiosk()` (in `src/framework_kiosk.js`) at the end of bootstrap. If `localStorage.getItem("kiosk") === "true"` it runs `component_kiosk()` which:
 
-- Lazy-creates the editor via `createEditor()` and shows the container (same as the launcher button).
-- Maximizes the window if it isn't already, by clicking the `□` button (located by text-content scan within `container`); falls back to inlining the same state transitions as `maxBtn.onclick` if the button isn't found.
+- Calls `component_window_launch()` (lazy-creates the editor via `createEditor()` and shows the container — same as the launcher button does).
+- Maximizes the window if it isn't already, by clicking the `□` button (located by text-content scan within `container`); falls back to inlining the same state transitions as `maxBtn.onclick` if the button isn't found, mutating `editorServiceWindow.mode` / `.previousBounds` directly.
 - Calls `redistributeColumns()` (the launcher does the same when restoring a maximized session — splitting columns requires a non-zero `offsetHeight`).
 
 Adding more boot-time behaviour controlled by `appsettings.json`: define a new property in `appsettings.json` `properties`, then add a corresponding `handle_*()` reader in `framework_kiosk.js` (or its own file) and call it at the end of `framework_init()`.

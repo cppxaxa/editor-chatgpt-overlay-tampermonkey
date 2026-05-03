@@ -281,12 +281,20 @@ The build tool:
 ```
 src/
   header.js                   # ==UserScript== banner + IIFE open
-  framework.js                # global state + framework_init() + framework_register_launcher()
+  framework.js                # framework_init(), framework_register_launcher(),
+                              #   and lifecycle hooks (framework_on_init,
+                              #   framework_on_launcher_registered,
+                              #   framework_on_window_resized)
   framework_scrollbars.js     # framework-level scrollbar styling
   framework_kiosk.js          # kiosk-mode bootstrap reader (calls component_kiosk)
   framework_launcher.js       # framework_launcher_register(text, onlaunch) — stacked launcher registry
+  service_window.js           # ServiceWindow class — generic floating-window
+                              #   mechanics (container, header, drag, resize,
+                              #   min/max/close, geometry persistence,
+                              #   registerTab, registerAction)
   component_kiosk.js          # auto-open + maximize when properties.kiosk = true
-  component_window.js         # floating window: header, drag, resize, min/max/close, master createEditor()
+  component_window.js         # editorServiceWindow instance + createEditor()
+                              #   wires tabs, action buttons, textarea content
   component_editor.js         # shared editor keydown (auto-indent, Tab, Ctrl+Z/Y dispatch)
   component_columns.js        # two-column layout for maximized mode
   component_tabbar.js         # tab switching + per-tab cursor/scroll state

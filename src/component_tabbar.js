@@ -32,28 +32,14 @@ function simpleHash(str) {
 }
 
 function getEditorContent() {
-    if (windowMode === "maximized") {
+    if (editorServiceWindow.mode === "maximized") {
         return mergeColumnContent();
     }
     return textarea.value;
 }
 
 function updateTabStyles() {
-    [editorTabBtn, asciiTabBtn, questionTabBtn, snippetsTabBtn, spreviewTabBtn].forEach(btn => {
-        btn.style.color = "#999";
-        btn.style.borderBottomColor = "transparent";
-    });
-    const active = {
-        editor: editorTabBtn,
-        ascii: asciiTabBtn,
-        question: questionTabBtn,
-        snippets: snippetsTabBtn,
-        spreview: spreviewTabBtn
-    }[activeTab];
-    if (active) {
-        active.style.color = "white";
-        active.style.borderBottomColor = "#4fc3f7";
-    }
+    if (editorServiceWindow) editorServiceWindow.setActiveTabHighlight(activeTab);
 }
 
 function getTabTA(tab) {
@@ -129,7 +115,7 @@ function switchTab(tabName) {
         snippetsTA.style.display = "none";
         spreviewFrame.style.display = "none";
 
-        if (windowMode === "maximized") {
+        if (editorServiceWindow.mode === "maximized") {
             columnContainer.style.display = "flex";
             (lastFocusedTA || leftTA).focus();
             restoreTabState("editor");

@@ -29,7 +29,7 @@ function handleLineAction() {
     const editorTA = isEditor ? activeTA : lastFocusedTA;
     if (!editorTA) return;
 
-    const ta = (windowMode === "maximized") ? editorTA : textarea;
+    const ta = (editorServiceWindow.mode === "maximized") ? editorTA : textarea;
 
     const cursor = ta.selectionStart;
     const text = ta.value;
@@ -54,7 +54,7 @@ function handleLineAction() {
 
         ta.dispatchEvent(new Event("input"));
         localStorage.setItem("tm_editor_content",
-            windowMode === "maximized" ? mergeColumnContent() : textarea.value);
+            editorServiceWindow.mode === "maximized" ? mergeColumnContent() : textarea.value);
     };
 
     const onstart = (ctx) => {
@@ -72,14 +72,14 @@ function handleLineAction() {
 
         const prompt = trimmed.substring(3);
 
-        const fullContent = windowMode === "maximized"
+        const fullContent = editorServiceWindow.mode === "maximized"
             ? mergeColumnContent()
             : textarea.value;
 
         const allLines = fullContent.split("\n");
 
         let cmdLineIdx = text.substring(0, start).split("\n").length - 1;
-        if (windowMode === "maximized" && ta === rightTA) {
+        if (editorServiceWindow.mode === "maximized" && ta === rightTA) {
             cmdLineIdx += leftTA.value.split("\n").length;
         }
         const cmdLineNum = cmdLineIdx + 1;

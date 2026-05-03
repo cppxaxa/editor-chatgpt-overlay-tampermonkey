@@ -105,7 +105,7 @@ function handleCodeCheck() {
     const isEditor = (activeTA === textarea || activeTA === leftTA || activeTA === rightTA);
     if (!isEditor && !lastFocusedTA) return;
 
-    if (windowMode === "maximized") {
+    if (editorServiceWindow.mode === "maximized") {
         clearAllMarkers(leftTA);
         clearAllMarkers(rightTA);
         redistributeColumns();
@@ -113,7 +113,7 @@ function handleCodeCheck() {
         clearAllMarkers(textarea);
     }
 
-    const code = windowMode === "maximized"
+    const code = editorServiceWindow.mode === "maximized"
         ? mergeColumnContent().trim()
         : textarea.value.trim();
 
@@ -127,7 +127,7 @@ function handleCodeCheck() {
     if (hash === checkCache.hash && checkCache.parsed) {
         showResultDialog("Code Check Result (cached)", checkCache.body);
         if (checkCache.parsed.markers && checkCache.parsed.markers.length) {
-            if (windowMode === "maximized") {
+            if (editorServiceWindow.mode === "maximized") {
                 textarea.value = mergeColumnContent();
                 insertMarkers(textarea, checkCache.parsed.markers);
                 const lines = textarea.value.split("\n");
@@ -197,7 +197,7 @@ function handleCodeCheck() {
 
         if (parsed.markers && parsed.markers.length) {
 
-            if (windowMode === "maximized") {
+            if (editorServiceWindow.mode === "maximized") {
                 textarea.value = mergeColumnContent();
                 insertMarkers(textarea, parsed.markers);
                 const lines = textarea.value.split("\n");

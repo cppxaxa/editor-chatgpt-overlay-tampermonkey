@@ -16,7 +16,7 @@ function component_kiosk() {
           Falls back to inlining the same state transitions performed by
           maxBtn.onclick in component_window.js if the button can't be
           found (e.g. future markup changes). */
-    if (windowMode !== "maximized") {
+    if (editorServiceWindow.mode !== "maximized") {
         const maxBtn = container.querySelector
             ? Array.from(container.querySelectorAll("button"))
                 .find(b => b.textContent === "□")
@@ -25,7 +25,7 @@ function component_kiosk() {
         if (maxBtn) {
             maxBtn.click();
         } else {
-            previousBounds = {
+            editorServiceWindow.previousBounds = {
                 left: container.style.left,
                 top: container.style.top,
                 width: container.style.width,
@@ -36,12 +36,12 @@ function component_kiosk() {
             container.style.width = "100vw";
             container.style.height = "100vh";
             if (resizeHandle) resizeHandle.style.display = "none";
-            windowMode = "maximized";
+            editorServiceWindow.mode = "maximized";
             if (activeTab === "editor") enterMaximizedColumnLayout();
         }
     }
 
     /* If we ended up maximized (just now or already), re-split the columns
        since the launcher path does the same when restoring. */
-    if (windowMode === "maximized") redistributeColumns();
+    if (editorServiceWindow.mode === "maximized") redistributeColumns();
 }
