@@ -349,8 +349,9 @@ function _service_taskbar_build_taskbar() {
     up.title = "Show hidden icons";
     up.onmouseover = () => { up.style.background = "rgba(255,255,255,0.08)"; };
     up.onmouseout  = () => { up.style.background = "transparent"; };
-    up.onclick = () => {
-        /* TODO: render an overflow popup. For now, no-op. */
+    up.onclick = (e) => {
+        e.stopPropagation();
+        _service_taskbar_open_tray_overflow(up);
     };
     right.appendChild(up);
 
@@ -780,6 +781,338 @@ function service_taskbar_register_tray_icon(opts) {
         remove() {
             if (btn.parentElement) btn.parentElement.removeChild(btn);
         }
+    };
+}
+
+/* ---- Tray app registry ----
+   Higher-level than service_taskbar_register_tray_icon. Apps register once;
+   the registry manages whether the icon is currently in the tray (controlled
+   by the user via the up-arrow overflow popup) and persists that preference
+   across reloads.
+
+   Each registration:
+     opts.appName     — REQUIRED. Stable id used as the persistence key.
+     opts.label       — Human-readable name shown in the overflow popup.
+     opts.icon        — Tray glyph (e.g. "C").
+     opts.title       — Tooltip on the tray button.
+     opts.onClick     — (btn) => void. Called when the tray icon is clicked.
+                        Receives the button DOM node (caller uses it for
+                        ServiceWindow tray-mode anchoring). When the user
+                        re-shows a hidden app, a new button is created and
+                        passed to a fresh onClick — apps that need this can
+                        re-adopt via ServiceWindow._adoptTrayButton.
+     opts.onAdopt     — Optional. (btn) => void called every time a fresh
+                        button is created (initial registration AND each
+                        unhide). Use this to rewire the click handler on
+                        the new DOM node. */
+
+const TRAY_HIDDEN_KEY = "tm_tray_hidden_apps";
+
+let _tray_apps = [];   // [{ appName, label, icon, title, onClick, onAdopt, handle }]
+
+function _service_taskbar_load_hidden() {
+    try {
+        const raw = localStorage.getItem(TRAY_HIDDEN_KEY);
+        if (!raw) return [];
+        const arr = JSON.parse(raw);
+        return Array.isArray(arr) ? arr : [];
+    } catch (e) { return []; }
+}
+
+function _service_taskbar_save_hidden(arr) {
+    try { localStorage.setItem(TRAY_HIDDEN_KEY, JSON.stringify(arr)); }
+    catch (e) {}
+}
+
+function _service_taskbar_is_app_hidden(appName) {
+    return _service_taskbar_load_hidden().indexOf(appName) >= 0;
+}
+
+function _service_taskbar_set_app_hidden(appName, hidden) {
+    let arr = _service_taskbar_load_hidden();
+    const idx = arr.indexOf(appName);
+    if (hidden && idx < 0) arr.push(appName);
+    if (!hidden && idx >= 0) arr.splice(idx, 1);
+    _service_taskbar_save_hidden(arr);
+}
+
+function service_taskbar_register_tray_app(opts) {
+
+    service_taskbar_init();
+
+    const app = {
+        appName: opts.appName,
+        label:   opts.label || opts.appName,
+        icon:    opts.icon  || (opts.appName || "?").charAt(0).toUpperCase(),
+        title:   opts.title || opts.label || opts.appName,
+        onClick: opts.onClick,
+        onAdopt: opts.onAdopt,
+        handle:  null
+    };
+    _tray_apps.push(app);
+
+    if (!_service_taskbar_is_app_hidden(app.appName)) {
+        _service_taskbar_show_app(app);
+    }
+
+    return {
+        /* Programmatic show/hide — same path as the user's overflow toggle. */
+        setVisible(on) {
+            _service_taskbar_set_app_visibility(app.appName, on);
+        }
+    };
+}
+
+function _service_taskbar_show_app(app) {
+    if (app.handle) return;   // already shown
+    app.handle = service_taskbar_register_tray_icon({
+        icon:  app.icon,
+        title: app.title,
+        onClick: (btn) => {
+            if (app.onClick) app.onClick(btn);
+        }
+    });
+    if (app.handle && app.onAdopt) {
+        try { app.onAdopt(app.handle.button); } catch (e) { console.error(e); }
+    }
+}
+
+function _service_taskbar_hide_app(app) {
+    if (!app.handle) return;
+    app.handle.remove();
+    app.handle = null;
+}
+
+function _service_taskbar_set_app_visibility(appName, on) {
+    const app = _tray_apps.find(a => a.appName === appName);
+    if (!app) return;
+    _service_taskbar_set_app_hidden(appName, !on);
+    if (on) _service_taskbar_show_app(app);
+    else    _service_taskbar_hide_app(app);
+}
+
+/* Look up the live tray button for an app, if currently visible.
+   Returns null if the app isn't registered or is hidden. Used by
+   component_*_create paths that want to wire the ServiceWindow against
+   whatever button currently exists. */
+function service_taskbar_get_tray_button(appName) {
+    const app = _tray_apps.find(a => a.appName === appName);
+    if (!app || !app.handle) return null;
+    return app.handle.button;
+}
+
+/* Read-only snapshot of the registered tray apps. Used by
+   framework_orphan_cleanup to detect stale entries in the
+   tm_tray_hidden_apps list. Returns shallow clones — callers must not
+   mutate live registry state. */
+function service_taskbar_list_tray_apps() {
+    return _tray_apps.map(a => ({
+        appName: a.appName,
+        label:   a.label,
+        icon:    a.icon
+    }));
+}
+
+/* ---- Tray overflow popup ----
+   Opened by clicking the up-arrow in the right-side cluster. Lists every
+   registered tray app with: name, a Launch button, and a Show-in-tray
+   toggle. A search box at the top filters the list by label. The popup
+   styling mirrors ServiceMenu (glass panel) so it feels consistent. */
+
+let _tray_overflow_popup = null;
+
+function _service_taskbar_close_tray_overflow() {
+    if (_tray_overflow_popup) {
+        if (_tray_overflow_popup._cleanup) _tray_overflow_popup._cleanup();
+        if (_tray_overflow_popup.parentNode) {
+            _tray_overflow_popup.parentNode.removeChild(_tray_overflow_popup);
+        }
+        _tray_overflow_popup = null;
+    }
+}
+
+function _service_taskbar_open_tray_overflow(anchorBtn) {
+
+    _service_taskbar_close_tray_overflow();
+
+    const popup = document.createElement("div");
+    Object.assign(popup.style, {
+        position: "fixed",
+        width: "300px",
+        maxHeight: "360px",
+        zIndex: "1000010",
+        background: "rgba(28, 30, 36, 0.78)",
+        backdropFilter: "blur(22px) saturate(160%)",
+        webkitBackdropFilter: "blur(22px) saturate(160%)",
+        border: "1px solid rgba(255,255,255,0.12)",
+        borderRadius: "6px",
+        boxShadow: "0 8px 28px rgba(0,0,0,0.55)",
+        color: "white",
+        fontFamily: "'Segoe UI', system-ui, sans-serif",
+        fontSize: "13px",
+        userSelect: "none",
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden"
+    });
+
+    /* Search box */
+    const searchWrap = document.createElement("div");
+    Object.assign(searchWrap.style, {
+        padding: "8px",
+        borderBottom: "1px solid rgba(255,255,255,0.08)"
+    });
+    const search = document.createElement("input");
+    search.type = "text";
+    search.placeholder = "Search tray apps…";
+    Object.assign(search.style, {
+        width: "100%",
+        boxSizing: "border-box",
+        background: "#15171c",
+        color: "white",
+        border: "1px solid #333",
+        borderRadius: "4px",
+        padding: "6px 8px",
+        fontSize: "13px",
+        fontFamily: "inherit",
+        outline: "none"
+    });
+    searchWrap.appendChild(search);
+    popup.appendChild(searchWrap);
+
+    /* Scrollable list */
+    const list = document.createElement("div");
+    Object.assign(list.style, {
+        flex: "1",
+        overflowY: "auto",
+        padding: "4px 0"
+    });
+    popup.appendChild(list);
+
+    const rebuild = () => {
+        const f = (search.value || "").toLowerCase().trim();
+        list.innerHTML = "";
+
+        const matches = _tray_apps.filter(a =>
+            !f || (a.label || "").toLowerCase().includes(f)
+        );
+
+        if (matches.length === 0) {
+            const empty = document.createElement("div");
+            empty.textContent = _tray_apps.length === 0
+                ? "No tray apps registered"
+                : "No matches";
+            Object.assign(empty.style, {
+                padding: "12px 14px",
+                color: "#888",
+                fontStyle: "italic"
+            });
+            list.appendChild(empty);
+            return;
+        }
+
+        for (const app of matches) {
+            const row = document.createElement("div");
+            Object.assign(row.style, {
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                padding: "6px 10px"
+            });
+
+            const labelEl = document.createElement("span");
+            labelEl.textContent = app.label;
+            Object.assign(labelEl.style, {
+                flex: "1",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis"
+            });
+            row.appendChild(labelEl);
+
+            const launchBtn = document.createElement("button");
+            launchBtn.textContent = "Launch";
+            Object.assign(launchBtn.style, {
+                background: "#4fc3f7",
+                color: "#000",
+                border: "none",
+                borderRadius: "3px",
+                padding: "3px 10px",
+                cursor: "pointer",
+                fontSize: "12px",
+                fontWeight: "bold",
+                fontFamily: "inherit",
+                flexShrink: "0"
+            });
+            launchBtn.onclick = () => {
+                /* If hidden, temporarily ensure the icon exists so onClick
+                   has a button to anchor against. We don't permanently
+                   re-show it — the toggle controls that. Instead we pass
+                   the up-arrow as the anchor when hidden. */
+                if (app.handle && app.handle.button) {
+                    app.onClick(app.handle.button);
+                } else {
+                    app.onClick(anchorBtn);
+                }
+                _service_taskbar_close_tray_overflow();
+            };
+            row.appendChild(launchBtn);
+
+            /* Show-in-tray toggle */
+            const visible = !_service_taskbar_is_app_hidden(app.appName);
+            const sw = _service_menu_make_switch(visible);
+            sw.el.style.cursor = "pointer";
+            sw.el.title = "Show in tray";
+            sw.el.addEventListener("click", () => {
+                const next = _service_taskbar_is_app_hidden(app.appName);  // toggle: hidden -> visible
+                _service_taskbar_set_app_visibility(app.appName, next);
+                sw.set(next);
+            });
+            row.appendChild(sw.el);
+
+            list.appendChild(row);
+        }
+    };
+
+    search.addEventListener("input", rebuild);
+    search.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") _service_taskbar_close_tray_overflow();
+    });
+
+    rebuild();
+
+    document.body.appendChild(popup);
+    _tray_overflow_popup = popup;
+
+    /* Anchor: above the up-arrow, right-aligned to its right edge. */
+    requestAnimationFrame(() => {
+        const r = anchorBtn.getBoundingClientRect();
+        const pr = popup.getBoundingClientRect();
+        let left = Math.round(r.right - pr.width);
+        let top  = Math.round(r.top - pr.height - 8);
+        left = Math.max(8, Math.min(left, window.innerWidth - pr.width - 8));
+        top  = Math.max(8, top);
+        popup.style.left = left + "px";
+        popup.style.top  = top  + "px";
+        setTimeout(() => search.focus(), 0);
+    });
+
+    /* Outside click / Escape close */
+    const onDown = (e) => {
+        if (popup.contains(e.target)) return;
+        if (anchorBtn.contains(e.target)) return;
+        _service_taskbar_close_tray_overflow();
+    };
+    const onKey = (e) => {
+        if (e.key === "Escape") _service_taskbar_close_tray_overflow();
+    };
+    setTimeout(() => {
+        document.addEventListener("mousedown", onDown, true);
+        document.addEventListener("keydown",   onKey,  true);
+    }, 0);
+    popup._cleanup = () => {
+        document.removeEventListener("mousedown", onDown, true);
+        document.removeEventListener("keydown",   onKey,  true);
     };
 }
 

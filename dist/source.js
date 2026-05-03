@@ -63,6 +63,7 @@ function framework_on_init() {
     component_linecommand_handle_init();
     component_window_handle_init();
     component_calc_handle_init();
+    component_chat_handle_init();
     component_localstorage_handle_init();
 }
 
@@ -72,6 +73,10 @@ function framework_init() {
     window.addEventListener("resize", framework_on_window_resized);
 
     framework_on_init();
+
+    /* Sweep stale per-app localStorage entries now that every component
+       has registered. Runs once per page load. */
+    framework_orphan_cleanup();
 
     handle_kiosk();
     handle_system_restore();
@@ -88,20 +93,22 @@ function framework_init() {
 
 let calcServiceWindow = null;
 let calcContainer     = null;
-let calcTrayHandle    = null;
 
 function component_calc_launch() {
     if (!calcContainer) component_calc_create();
-    /* If launched via tray icon, _toggleFromTray handles show() + snap. If
-       launched via Start menu, do a normal show. We can't tell here which
-       path the user took — show() is idempotent and the tray-mode patch on
-       hide() doesn't affect show(), so calling show() unconditionally is
-       safe for both paths. The tray-icon onClick path replaces show() with
-       its own toggle/snap, so that path doesn't reach this function. */
     calcServiceWindow.show();
 }
 
 function component_calc_create() {
+
+    /* Look up the current tray button (may be null if the user has hidden
+       the icon via the overflow popup). Pass it through opts.trayButton so
+       create() installs the tray-mode patches: hidden min/max, outside-click
+       hide, downward tail, defaultClose tail-hide. The registry's onAdopt
+       will keep this in sync if the button is later replaced. */
+    const trayBtn = (typeof service_taskbar_get_tray_button === "function")
+        ? service_taskbar_get_tray_button("calc")
+        : null;
 
     calcServiceWindow = new ServiceWindow();
     calcServiceWindow.create({
@@ -110,11 +117,14 @@ function component_calc_create() {
         height: 200,
         isDraggable: () => true,
         isResizable: () => true,
-        /* Adopt the tray button registered at init time so the icon was
-           visible in the tray even before the window was lazily created. */
-        trayButton: calcTrayHandle && calcTrayHandle.button,
-        trayHandle: calcTrayHandle
+        trayButton: trayBtn   // null is fine — tray patches install on next adopt
     });
+
+    /* If no tray button existed at create() time, install the tray-mode
+       behaviour anyway by calling _adoptTrayButton(null) — but we can't
+       pass null because the patches need a button to anchor against.
+       Instead, the registry's onAdopt handles future button creations.
+       For the "hidden at boot" case the user can re-show via overflow. */
 
     calcServiceWindow.registerTab({ id: "calc", label: "Calc" });
 
@@ -164,17 +174,271 @@ function component_calc_create() {
 function component_calc_handle_init() {
     ServiceWindow.registerApp("calc", component_calc_launch);
 
-    if (typeof service_taskbar_register_tray_icon === "function") {
-        calcTrayHandle = service_taskbar_register_tray_icon({
-            icon:  "C",
-            title: "Calc",
-            onClick: () => {
+    if (typeof service_taskbar_register_tray_app === "function") {
+        service_taskbar_register_tray_app({
+            appName: "calc",
+            label:   "Calc",
+            icon:    "🧮",
+            title:   "Calc",
+            onClick: (btn) => {
                 if (!calcContainer) component_calc_create();
-                /* After create(), the window's _adoptTrayButton replaced the
-                   button's onclick with its own toggle. That new handler
-                   isn't running for THIS click (we're already inside the
-                   old handler), so explicitly trigger the toggle. */
-                calcServiceWindow._toggleFromTray(calcTrayHandle.button);
+                calcServiceWindow._toggleFromTray(btn);
+            },
+            /* Called on initial registration AND every time the user
+               re-shows the icon via the overflow popup (the DOM node
+               changes each time). Tell the live ServiceWindow about the
+               new button so its outside-click handler and tray-click
+               wiring stay in sync. */
+            onAdopt: (btn) => {
+                if (calcServiceWindow) {
+                    calcServiceWindow._adoptTrayButton(btn, null);
+                }
+            }
+        });
+    }
+}
+
+// ===== src/component_chat.js =====
+// -----------------------------------------------------------------------------
+// component_chat.js — IM-style chat app. Text input at the bottom, scrollable
+// message log above. Sends prompts via submitMessage (service_llm.js) and
+// displays responses inline. Shows a waiting indicator while the LLM streams.
+// -----------------------------------------------------------------------------
+
+let chatServiceWindow = null;
+let chatContainer      = null;
+
+// DOM refs
+let _chat_log       = null;   // scrollable message history
+let _chat_input     = null;   // prompt textarea
+let _chat_sendBtn   = null;   // send button
+let _chat_waiting   = false;  // true while an LLM job is in flight
+
+function component_chat_launch() {
+    if (!chatContainer) component_chat_create();
+    chatServiceWindow.show();
+}
+
+function component_chat_create() {
+
+    const trayBtn = (typeof service_taskbar_get_tray_button === "function")
+        ? service_taskbar_get_tray_button("chat")
+        : null;
+
+    chatServiceWindow = new ServiceWindow();
+    chatServiceWindow.create({
+        appName:     "chat",
+        width:       480,
+        height:      400,
+        isDraggable: () => true,
+        isResizable: () => true,
+        trayButton:  trayBtn
+    });
+
+    chatServiceWindow.registerTab({ id: "chat", label: "Chat" });
+    chatServiceWindow.appendControls();
+
+    chatContainer = chatServiceWindow.container;
+
+    /* Body — flex column, no padding so we control spacing ourselves. */
+    const body = chatServiceWindow.createBody({ padding: "0", gap: "0" });
+
+    /* ---- Message log ---- */
+    _chat_log = document.createElement("div");
+    Object.assign(_chat_log.style, {
+        flex:       "1",
+        overflowY:  "auto",
+        padding:    "8px",
+        fontSize:   "13px",
+        fontFamily: "Consolas, monospace",
+        color:      "white"
+    });
+    body.appendChild(_chat_log);
+
+    /* ---- Input bar (textarea + send button) ---- */
+    const inputBar = document.createElement("div");
+    Object.assign(inputBar.style, {
+        display:       "flex",
+        gap:           "4px",
+        padding:       "6px 8px",
+        borderTop:     "1px solid #333",
+        background:    "#252525",
+        alignItems:    "flex-end"
+    });
+
+    _chat_input = document.createElement("textarea");
+    _chat_input.placeholder = "Enter prompt...";
+    _chat_input.rows = 2;
+    Object.assign(_chat_input.style, {
+        flex:        "1",
+        background:  "#2a2a2a",
+        color:       "white",
+        border:      "1px solid #444",
+        borderRadius: "4px",
+        padding:     "6px",
+        fontSize:    "13px",
+        fontFamily:  "Consolas, monospace",
+        resize:      "none",
+        lineHeight:  "1.4"
+    });
+
+    /* Enter sends (Shift+Enter for newline). */
+    _chat_input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            _chat_do_send();
+        }
+    });
+
+    _chat_sendBtn = document.createElement("button");
+    _chat_sendBtn.textContent = "Send";
+    Object.assign(_chat_sendBtn.style, {
+        background:   "#4fc3f7",
+        color:        "#000",
+        border:       "none",
+        borderRadius: "4px",
+        padding:      "6px 14px",
+        cursor:       "pointer",
+        fontWeight:   "bold",
+        fontSize:     "13px",
+        alignSelf:    "stretch"
+    });
+    _chat_sendBtn.onclick = () => _chat_do_send();
+
+    inputBar.appendChild(_chat_input);
+    inputBar.appendChild(_chat_sendBtn);
+    body.appendChild(inputBar);
+
+    /* Restore geometry or center. */
+    if (!chatServiceWindow.restoreState()) {
+        service_window_center(chatContainer, 480, 400);
+    }
+}
+
+/* ---- Send logic ---- */
+
+function _chat_do_send() {
+    if (_chat_waiting) return;
+    const prompt = (_chat_input.value || "").trim();
+    if (!prompt) return;
+
+    /* Append user message to log. */
+    _chat_append_message("You", prompt);
+
+    _chat_input.value = "";
+
+    /* Show waiting indicator. */
+    const waitEl = _chat_append_waiting();
+
+    _chat_waiting = true;
+    _chat_sendBtn.textContent = "...";
+    _chat_sendBtn.style.opacity = "0.5";
+    _chat_input.readOnly = true;
+
+    submitMessage(
+        prompt,
+        /* onstart */ null,
+        /* onend   */ (ctx) => {
+            _chat_waiting = false;
+            _chat_sendBtn.textContent = "Send";
+            _chat_sendBtn.style.opacity = "1";
+            _chat_input.readOnly = false;
+
+            /* Remove waiting indicator. */
+            if (waitEl && waitEl.parentElement) waitEl.parentElement.removeChild(waitEl);
+
+            if (ctx.cancelled) {
+                _chat_append_message("System", "(cancelled)");
+            } else if (ctx.error) {
+                _chat_append_message("System", "Error: " + ctx.error);
+            } else {
+                _chat_append_message("Assistant", ctx.result || "(empty response)");
+            }
+
+            _chat_input.focus();
+        }
+    );
+}
+
+/* ---- DOM helpers ---- */
+
+function _chat_append_message(role, text) {
+    const wrapper = document.createElement("div");
+    Object.assign(wrapper.style, {
+        marginBottom: "8px",
+        whiteSpace:   "pre-wrap",
+        wordBreak:    "break-word",
+        lineHeight:   "1.4"
+    });
+
+    const label = document.createElement("span");
+    label.textContent = role + ": ";
+    Object.assign(label.style, {
+        fontWeight: "bold",
+        color: role === "You" ? "#4fc3f7" : role === "Assistant" ? "#a5d6a7" : "#ffcc80"
+    });
+
+    const content = document.createElement("span");
+    content.textContent = text;
+    content.style.color = "#ddd";
+
+    wrapper.appendChild(label);
+    wrapper.appendChild(content);
+    _chat_log.appendChild(wrapper);
+
+    /* Auto-scroll to bottom. */
+    _chat_log.scrollTop = _chat_log.scrollHeight;
+
+    return wrapper;
+}
+
+function _chat_append_waiting() {
+    const el = document.createElement("div");
+    Object.assign(el.style, {
+        marginBottom: "8px",
+        color:        "#888",
+        fontSize:     "13px"
+    });
+    el.textContent = "Waiting";
+
+    let dots = 0;
+    const tid = setInterval(() => {
+        dots = (dots + 1) % 4;
+        el.textContent = "Waiting" + ".".repeat(dots);
+    }, 400);
+
+    /* Stash the interval id so cleanup can stop it. */
+    el._chatWaitTid = tid;
+
+    /* Patch removeChild to auto-clear the interval. */
+    const origRemove = el.remove.bind(el);
+    el.remove = () => { clearInterval(tid); origRemove(); };
+
+    _chat_log.appendChild(el);
+    _chat_log.scrollTop = _chat_log.scrollHeight;
+
+    return el;
+}
+
+/* ---- Framework lifecycle ---- */
+
+function component_chat_handle_init() {
+    ServiceWindow.registerApp("chat", component_chat_launch);
+
+    if (typeof service_taskbar_register_tray_app === "function") {
+        service_taskbar_register_tray_app({
+            appName: "chat",
+            label:   "Chat",
+            icon:    "💬",
+            title:   "Chat",
+            onClick: (btn) => {
+                if (!chatContainer) component_chat_create();
+                chatServiceWindow._toggleFromTray(btn);
+            },
+            onAdopt: (btn) => {
+                if (chatServiceWindow) {
+                    chatServiceWindow._adoptTrayButton(btn, null);
+                }
             }
         });
     }
@@ -2277,6 +2541,97 @@ function framework_launcher_kdeubuntu_register(textContent, onlaunch) {
     service_taskbar_register_app(textContent, onlaunch);
 }
 
+// ===== src/framework_orphan_cleanup.js =====
+// -----------------------------------------------------------------------------
+// framework_orphan_cleanup.js — sweep stale per-app localStorage entries.
+//
+// Why one-shot at end of init, not per-mutation:
+//   - Safe: every component_*_handle_init() has already registered with
+//     ServiceWindow._apps, so we know the full set of live appNames. Deleting
+//     a key for an unknown app means the owning component truly no longer
+//     exists in this build (renamed, removed, or feature-flagged out).
+//   - Cheap: runs once per page load, scans only a handful of keys.
+//   - No surprises during normal use: nothing is deleted while the user is
+//     interacting with windows, tabs, or the tray overflow popup.
+//
+// What we sweep:
+//   - "tm_window_<appName>" geometry blobs whose appName is not in
+//     ServiceWindow._apps.
+//   - "tm_tray_hidden_apps" entries whose appName is not in the tray-app
+//     registry. Tray apps register through service_taskbar_register_tray_app,
+//     which keeps an internal _tray_apps list — we expose
+//     service_taskbar_list_tray_apps() so this file doesn't need to reach
+//     into private state.
+//
+// What we DO NOT sweep:
+//   - Cache keys (tm_ascii_cache, tm_question_cache, …): they don't follow
+//     the <prefix>_<appName> pattern and are owned by component_window's tab
+//     system; cleaning them would couple this file to component internals.
+//   - Anything not matching a known prefix. Unknown keys are left alone so
+//     third-party data on the page isn't touched.
+// -----------------------------------------------------------------------------
+
+const FRAMEWORK_ORPHAN_PREFIX_WINDOW = "tm_window_";
+
+function framework_orphan_cleanup() {
+
+    /* ---- Window geometry blobs ---- */
+
+    const liveAppNames = new Set();
+    if (typeof ServiceWindow !== "undefined" && Array.isArray(ServiceWindow._apps)) {
+        for (const a of ServiceWindow._apps) liveAppNames.add(a.appName);
+    }
+
+    /* Snapshot keys first — mutating localStorage while iterating its length
+       index causes us to skip entries. */
+    const allKeys = [];
+    try {
+        for (let i = 0; i < localStorage.length; i++) {
+            allKeys.push(localStorage.key(i));
+        }
+    } catch (e) { return; }
+
+    let removedWindow = 0;
+    for (const k of allKeys) {
+        if (!k || !k.startsWith(FRAMEWORK_ORPHAN_PREFIX_WINDOW)) continue;
+        const appName = k.slice(FRAMEWORK_ORPHAN_PREFIX_WINDOW.length);
+        if (liveAppNames.has(appName)) continue;
+        try { localStorage.removeItem(k); removedWindow++; } catch (e) {}
+    }
+
+    /* ---- Tray-hidden list ---- */
+
+    let removedTray = 0;
+    if (typeof service_taskbar_list_tray_apps === "function") {
+        try {
+            const liveTrayNames = new Set(
+                service_taskbar_list_tray_apps().map(a => a.appName)
+            );
+            const raw = localStorage.getItem("tm_tray_hidden_apps");
+            if (raw) {
+                const arr = JSON.parse(raw);
+                if (Array.isArray(arr)) {
+                    const filtered = arr.filter(n => liveTrayNames.has(n));
+                    if (filtered.length !== arr.length) {
+                        removedTray = arr.length - filtered.length;
+                        localStorage.setItem(
+                            "tm_tray_hidden_apps",
+                            JSON.stringify(filtered)
+                        );
+                    }
+                }
+            }
+        } catch (e) { /* best-effort */ }
+    }
+
+    if (removedWindow || removedTray) {
+        console.log(
+            "[orphan-cleanup] removed " + removedWindow + " window state(s), " +
+            removedTray + " tray-hidden entry(ies)"
+        );
+    }
+}
+
 // ===== src/framework_scrollbars.js =====
 // -----------------------------------------------------------------------------
 // framework_scrollbars.js — injects a minimalist black-theme scrollbar style
@@ -3501,8 +3856,9 @@ function _service_taskbar_build_taskbar() {
     up.title = "Show hidden icons";
     up.onmouseover = () => { up.style.background = "rgba(255,255,255,0.08)"; };
     up.onmouseout  = () => { up.style.background = "transparent"; };
-    up.onclick = () => {
-        /* TODO: render an overflow popup. For now, no-op. */
+    up.onclick = (e) => {
+        e.stopPropagation();
+        _service_taskbar_open_tray_overflow(up);
     };
     right.appendChild(up);
 
@@ -3932,6 +4288,338 @@ function service_taskbar_register_tray_icon(opts) {
         remove() {
             if (btn.parentElement) btn.parentElement.removeChild(btn);
         }
+    };
+}
+
+/* ---- Tray app registry ----
+   Higher-level than service_taskbar_register_tray_icon. Apps register once;
+   the registry manages whether the icon is currently in the tray (controlled
+   by the user via the up-arrow overflow popup) and persists that preference
+   across reloads.
+
+   Each registration:
+     opts.appName     — REQUIRED. Stable id used as the persistence key.
+     opts.label       — Human-readable name shown in the overflow popup.
+     opts.icon        — Tray glyph (e.g. "C").
+     opts.title       — Tooltip on the tray button.
+     opts.onClick     — (btn) => void. Called when the tray icon is clicked.
+                        Receives the button DOM node (caller uses it for
+                        ServiceWindow tray-mode anchoring). When the user
+                        re-shows a hidden app, a new button is created and
+                        passed to a fresh onClick — apps that need this can
+                        re-adopt via ServiceWindow._adoptTrayButton.
+     opts.onAdopt     — Optional. (btn) => void called every time a fresh
+                        button is created (initial registration AND each
+                        unhide). Use this to rewire the click handler on
+                        the new DOM node. */
+
+const TRAY_HIDDEN_KEY = "tm_tray_hidden_apps";
+
+let _tray_apps = [];   // [{ appName, label, icon, title, onClick, onAdopt, handle }]
+
+function _service_taskbar_load_hidden() {
+    try {
+        const raw = localStorage.getItem(TRAY_HIDDEN_KEY);
+        if (!raw) return [];
+        const arr = JSON.parse(raw);
+        return Array.isArray(arr) ? arr : [];
+    } catch (e) { return []; }
+}
+
+function _service_taskbar_save_hidden(arr) {
+    try { localStorage.setItem(TRAY_HIDDEN_KEY, JSON.stringify(arr)); }
+    catch (e) {}
+}
+
+function _service_taskbar_is_app_hidden(appName) {
+    return _service_taskbar_load_hidden().indexOf(appName) >= 0;
+}
+
+function _service_taskbar_set_app_hidden(appName, hidden) {
+    let arr = _service_taskbar_load_hidden();
+    const idx = arr.indexOf(appName);
+    if (hidden && idx < 0) arr.push(appName);
+    if (!hidden && idx >= 0) arr.splice(idx, 1);
+    _service_taskbar_save_hidden(arr);
+}
+
+function service_taskbar_register_tray_app(opts) {
+
+    service_taskbar_init();
+
+    const app = {
+        appName: opts.appName,
+        label:   opts.label || opts.appName,
+        icon:    opts.icon  || (opts.appName || "?").charAt(0).toUpperCase(),
+        title:   opts.title || opts.label || opts.appName,
+        onClick: opts.onClick,
+        onAdopt: opts.onAdopt,
+        handle:  null
+    };
+    _tray_apps.push(app);
+
+    if (!_service_taskbar_is_app_hidden(app.appName)) {
+        _service_taskbar_show_app(app);
+    }
+
+    return {
+        /* Programmatic show/hide — same path as the user's overflow toggle. */
+        setVisible(on) {
+            _service_taskbar_set_app_visibility(app.appName, on);
+        }
+    };
+}
+
+function _service_taskbar_show_app(app) {
+    if (app.handle) return;   // already shown
+    app.handle = service_taskbar_register_tray_icon({
+        icon:  app.icon,
+        title: app.title,
+        onClick: (btn) => {
+            if (app.onClick) app.onClick(btn);
+        }
+    });
+    if (app.handle && app.onAdopt) {
+        try { app.onAdopt(app.handle.button); } catch (e) { console.error(e); }
+    }
+}
+
+function _service_taskbar_hide_app(app) {
+    if (!app.handle) return;
+    app.handle.remove();
+    app.handle = null;
+}
+
+function _service_taskbar_set_app_visibility(appName, on) {
+    const app = _tray_apps.find(a => a.appName === appName);
+    if (!app) return;
+    _service_taskbar_set_app_hidden(appName, !on);
+    if (on) _service_taskbar_show_app(app);
+    else    _service_taskbar_hide_app(app);
+}
+
+/* Look up the live tray button for an app, if currently visible.
+   Returns null if the app isn't registered or is hidden. Used by
+   component_*_create paths that want to wire the ServiceWindow against
+   whatever button currently exists. */
+function service_taskbar_get_tray_button(appName) {
+    const app = _tray_apps.find(a => a.appName === appName);
+    if (!app || !app.handle) return null;
+    return app.handle.button;
+}
+
+/* Read-only snapshot of the registered tray apps. Used by
+   framework_orphan_cleanup to detect stale entries in the
+   tm_tray_hidden_apps list. Returns shallow clones — callers must not
+   mutate live registry state. */
+function service_taskbar_list_tray_apps() {
+    return _tray_apps.map(a => ({
+        appName: a.appName,
+        label:   a.label,
+        icon:    a.icon
+    }));
+}
+
+/* ---- Tray overflow popup ----
+   Opened by clicking the up-arrow in the right-side cluster. Lists every
+   registered tray app with: name, a Launch button, and a Show-in-tray
+   toggle. A search box at the top filters the list by label. The popup
+   styling mirrors ServiceMenu (glass panel) so it feels consistent. */
+
+let _tray_overflow_popup = null;
+
+function _service_taskbar_close_tray_overflow() {
+    if (_tray_overflow_popup) {
+        if (_tray_overflow_popup._cleanup) _tray_overflow_popup._cleanup();
+        if (_tray_overflow_popup.parentNode) {
+            _tray_overflow_popup.parentNode.removeChild(_tray_overflow_popup);
+        }
+        _tray_overflow_popup = null;
+    }
+}
+
+function _service_taskbar_open_tray_overflow(anchorBtn) {
+
+    _service_taskbar_close_tray_overflow();
+
+    const popup = document.createElement("div");
+    Object.assign(popup.style, {
+        position: "fixed",
+        width: "300px",
+        maxHeight: "360px",
+        zIndex: "1000010",
+        background: "rgba(28, 30, 36, 0.78)",
+        backdropFilter: "blur(22px) saturate(160%)",
+        webkitBackdropFilter: "blur(22px) saturate(160%)",
+        border: "1px solid rgba(255,255,255,0.12)",
+        borderRadius: "6px",
+        boxShadow: "0 8px 28px rgba(0,0,0,0.55)",
+        color: "white",
+        fontFamily: "'Segoe UI', system-ui, sans-serif",
+        fontSize: "13px",
+        userSelect: "none",
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden"
+    });
+
+    /* Search box */
+    const searchWrap = document.createElement("div");
+    Object.assign(searchWrap.style, {
+        padding: "8px",
+        borderBottom: "1px solid rgba(255,255,255,0.08)"
+    });
+    const search = document.createElement("input");
+    search.type = "text";
+    search.placeholder = "Search tray apps…";
+    Object.assign(search.style, {
+        width: "100%",
+        boxSizing: "border-box",
+        background: "#15171c",
+        color: "white",
+        border: "1px solid #333",
+        borderRadius: "4px",
+        padding: "6px 8px",
+        fontSize: "13px",
+        fontFamily: "inherit",
+        outline: "none"
+    });
+    searchWrap.appendChild(search);
+    popup.appendChild(searchWrap);
+
+    /* Scrollable list */
+    const list = document.createElement("div");
+    Object.assign(list.style, {
+        flex: "1",
+        overflowY: "auto",
+        padding: "4px 0"
+    });
+    popup.appendChild(list);
+
+    const rebuild = () => {
+        const f = (search.value || "").toLowerCase().trim();
+        list.innerHTML = "";
+
+        const matches = _tray_apps.filter(a =>
+            !f || (a.label || "").toLowerCase().includes(f)
+        );
+
+        if (matches.length === 0) {
+            const empty = document.createElement("div");
+            empty.textContent = _tray_apps.length === 0
+                ? "No tray apps registered"
+                : "No matches";
+            Object.assign(empty.style, {
+                padding: "12px 14px",
+                color: "#888",
+                fontStyle: "italic"
+            });
+            list.appendChild(empty);
+            return;
+        }
+
+        for (const app of matches) {
+            const row = document.createElement("div");
+            Object.assign(row.style, {
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                padding: "6px 10px"
+            });
+
+            const labelEl = document.createElement("span");
+            labelEl.textContent = app.label;
+            Object.assign(labelEl.style, {
+                flex: "1",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis"
+            });
+            row.appendChild(labelEl);
+
+            const launchBtn = document.createElement("button");
+            launchBtn.textContent = "Launch";
+            Object.assign(launchBtn.style, {
+                background: "#4fc3f7",
+                color: "#000",
+                border: "none",
+                borderRadius: "3px",
+                padding: "3px 10px",
+                cursor: "pointer",
+                fontSize: "12px",
+                fontWeight: "bold",
+                fontFamily: "inherit",
+                flexShrink: "0"
+            });
+            launchBtn.onclick = () => {
+                /* If hidden, temporarily ensure the icon exists so onClick
+                   has a button to anchor against. We don't permanently
+                   re-show it — the toggle controls that. Instead we pass
+                   the up-arrow as the anchor when hidden. */
+                if (app.handle && app.handle.button) {
+                    app.onClick(app.handle.button);
+                } else {
+                    app.onClick(anchorBtn);
+                }
+                _service_taskbar_close_tray_overflow();
+            };
+            row.appendChild(launchBtn);
+
+            /* Show-in-tray toggle */
+            const visible = !_service_taskbar_is_app_hidden(app.appName);
+            const sw = _service_menu_make_switch(visible);
+            sw.el.style.cursor = "pointer";
+            sw.el.title = "Show in tray";
+            sw.el.addEventListener("click", () => {
+                const next = _service_taskbar_is_app_hidden(app.appName);  // toggle: hidden -> visible
+                _service_taskbar_set_app_visibility(app.appName, next);
+                sw.set(next);
+            });
+            row.appendChild(sw.el);
+
+            list.appendChild(row);
+        }
+    };
+
+    search.addEventListener("input", rebuild);
+    search.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") _service_taskbar_close_tray_overflow();
+    });
+
+    rebuild();
+
+    document.body.appendChild(popup);
+    _tray_overflow_popup = popup;
+
+    /* Anchor: above the up-arrow, right-aligned to its right edge. */
+    requestAnimationFrame(() => {
+        const r = anchorBtn.getBoundingClientRect();
+        const pr = popup.getBoundingClientRect();
+        let left = Math.round(r.right - pr.width);
+        let top  = Math.round(r.top - pr.height - 8);
+        left = Math.max(8, Math.min(left, window.innerWidth - pr.width - 8));
+        top  = Math.max(8, top);
+        popup.style.left = left + "px";
+        popup.style.top  = top  + "px";
+        setTimeout(() => search.focus(), 0);
+    });
+
+    /* Outside click / Escape close */
+    const onDown = (e) => {
+        if (popup.contains(e.target)) return;
+        if (anchorBtn.contains(e.target)) return;
+        _service_taskbar_close_tray_overflow();
+    };
+    const onKey = (e) => {
+        if (e.key === "Escape") _service_taskbar_close_tray_overflow();
+    };
+    setTimeout(() => {
+        document.addEventListener("mousedown", onDown, true);
+        document.addEventListener("keydown",   onKey,  true);
+    }, 0);
+    popup._cleanup = () => {
+        document.removeEventListener("mousedown", onDown, true);
+        document.removeEventListener("keydown",   onKey,  true);
     };
 }
 
@@ -4383,6 +5071,25 @@ class ServiceWindow {
        tail, and patches defaultClose/hide to clean up. */
     _adoptTrayButton(btn, handle) {
 
+        /* Re-adoption: when the registry hides+re-shows an app's tray icon,
+           the DOM node changes. Update the live reference and re-wire the
+           click handler, but don't re-install the one-time tail/outside-
+           click/hide/close patches. */
+        if (this._trayAdopted) {
+            this._trayBtn = btn;
+            this._trayHandle = handle || {
+                button: btn,
+                remove() { if (btn.parentElement) btn.parentElement.removeChild(btn); }
+            };
+            btn.onclick = (e) => {
+                e.stopPropagation();
+                this._toggleFromTray(btn);
+            };
+            return;
+        }
+        this._trayAdopted = true;
+        this._trayBtn     = btn;
+
         this._trayHandle = handle || {
             button: btn,
             remove() { if (btn.parentElement) btn.parentElement.removeChild(btn); }
@@ -4390,7 +5097,7 @@ class ServiceWindow {
 
         btn.onclick = (e) => {
             e.stopPropagation();
-            this._toggleFromTray(btn);
+            this._toggleFromTray(this._trayBtn);
         };
 
         /* Tray apps don't need min/max — they're toggled by the tray icon
@@ -4447,7 +5154,7 @@ class ServiceWindow {
             if (!this.visible) return;
             if (this.mode === "minimized") return;
             if (this.container && this.container.contains(e.target)) return;
-            if (btn.contains(e.target)) return;
+            if (this._trayBtn && this._trayBtn.contains(e.target)) return;
             if (tail.contains(e.target)) return;
             this.hide();
         };
@@ -4487,6 +5194,15 @@ class ServiceWindow {
 
         if (this.mode === "maximized") return;   // maximized fills viewport; no snap
         if (this.mode === "minimized") return;   // header-only strip; no snap
+
+        /* If no tray button is currently attached (icon hidden via registry),
+           skip the snap+tail and just leave the window where the user last
+           dragged it / where restoreState put it. */
+        if (!btn) {
+            if (this._trayTailEl) this._trayTailEl.style.display = "none";
+            this.persistState();
+            return;
+        }
 
         const r = btn.getBoundingClientRect();
         const cw = this.container.offsetWidth;

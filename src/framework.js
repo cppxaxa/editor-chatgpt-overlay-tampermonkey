@@ -38,6 +38,7 @@ function framework_on_init() {
     component_linecommand_handle_init();
     component_window_handle_init();
     component_calc_handle_init();
+    component_chat_handle_init();
     component_localstorage_handle_init();
 }
 
@@ -47,6 +48,10 @@ function framework_init() {
     window.addEventListener("resize", framework_on_window_resized);
 
     framework_on_init();
+
+    /* Sweep stale per-app localStorage entries now that every component
+       has registered. Runs once per page load. */
+    framework_orphan_cleanup();
 
     handle_kiosk();
     handle_system_restore();

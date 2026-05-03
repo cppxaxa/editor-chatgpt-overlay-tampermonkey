@@ -239,6 +239,25 @@ class ServiceWindow {
        tail, and patches defaultClose/hide to clean up. */
     _adoptTrayButton(btn, handle) {
 
+        /* Re-adoption: when the registry hides+re-shows an app's tray icon,
+           the DOM node changes. Update the live reference and re-wire the
+           click handler, but don't re-install the one-time tail/outside-
+           click/hide/close patches. */
+        if (this._trayAdopted) {
+            this._trayBtn = btn;
+            this._trayHandle = handle || {
+                button: btn,
+                remove() { if (btn.parentElement) btn.parentElement.removeChild(btn); }
+            };
+            btn.onclick = (e) => {
+                e.stopPropagation();
+                this._toggleFromTray(btn);
+            };
+            return;
+        }
+        this._trayAdopted = true;
+        this._trayBtn     = btn;
+
         this._trayHandle = handle || {
             button: btn,
             remove() { if (btn.parentElement) btn.parentElement.removeChild(btn); }
@@ -246,7 +265,7 @@ class ServiceWindow {
 
         btn.onclick = (e) => {
             e.stopPropagation();
-            this._toggleFromTray(btn);
+            this._toggleFromTray(this._trayBtn);
         };
 
         /* Tray apps don't need min/max — they're toggled by the tray icon
@@ -303,7 +322,7 @@ class ServiceWindow {
             if (!this.visible) return;
             if (this.mode === "minimized") return;
             if (this.container && this.container.contains(e.target)) return;
-            if (btn.contains(e.target)) return;
+            if (this._trayBtn && this._trayBtn.contains(e.target)) return;
             if (tail.contains(e.target)) return;
             this.hide();
         };
@@ -343,6 +362,15 @@ class ServiceWindow {
 
         if (this.mode === "maximized") return;   // maximized fills viewport; no snap
         if (this.mode === "minimized") return;   // header-only strip; no snap
+
+        /* If no tray button is currently attached (icon hidden via registry),
+           skip the snap+tail and just leave the window where the user last
+           dragged it / where restoreState put it. */
+        if (!btn) {
+            if (this._trayTailEl) this._trayTailEl.style.display = "none";
+            this.persistState();
+            return;
+        }
 
         const r = btn.getBoundingClientRect();
         const cw = this.container.offsetWidth;

@@ -8,20 +8,22 @@
 
 let calcServiceWindow = null;
 let calcContainer     = null;
-let calcTrayHandle    = null;
 
 function component_calc_launch() {
     if (!calcContainer) component_calc_create();
-    /* If launched via tray icon, _toggleFromTray handles show() + snap. If
-       launched via Start menu, do a normal show. We can't tell here which
-       path the user took — show() is idempotent and the tray-mode patch on
-       hide() doesn't affect show(), so calling show() unconditionally is
-       safe for both paths. The tray-icon onClick path replaces show() with
-       its own toggle/snap, so that path doesn't reach this function. */
     calcServiceWindow.show();
 }
 
 function component_calc_create() {
+
+    /* Look up the current tray button (may be null if the user has hidden
+       the icon via the overflow popup). Pass it through opts.trayButton so
+       create() installs the tray-mode patches: hidden min/max, outside-click
+       hide, downward tail, defaultClose tail-hide. The registry's onAdopt
+       will keep this in sync if the button is later replaced. */
+    const trayBtn = (typeof service_taskbar_get_tray_button === "function")
+        ? service_taskbar_get_tray_button("calc")
+        : null;
 
     calcServiceWindow = new ServiceWindow();
     calcServiceWindow.create({
@@ -30,11 +32,14 @@ function component_calc_create() {
         height: 200,
         isDraggable: () => true,
         isResizable: () => true,
-        /* Adopt the tray button registered at init time so the icon was
-           visible in the tray even before the window was lazily created. */
-        trayButton: calcTrayHandle && calcTrayHandle.button,
-        trayHandle: calcTrayHandle
+        trayButton: trayBtn   // null is fine — tray patches install on next adopt
     });
+
+    /* If no tray button existed at create() time, install the tray-mode
+       behaviour anyway by calling _adoptTrayButton(null) — but we can't
+       pass null because the patches need a button to anchor against.
+       Instead, the registry's onAdopt handles future button creations.
+       For the "hidden at boot" case the user can re-show via overflow. */
 
     calcServiceWindow.registerTab({ id: "calc", label: "Calc" });
 
@@ -84,17 +89,25 @@ function component_calc_create() {
 function component_calc_handle_init() {
     ServiceWindow.registerApp("calc", component_calc_launch);
 
-    if (typeof service_taskbar_register_tray_icon === "function") {
-        calcTrayHandle = service_taskbar_register_tray_icon({
-            icon:  "C",
-            title: "Calc",
-            onClick: () => {
+    if (typeof service_taskbar_register_tray_app === "function") {
+        service_taskbar_register_tray_app({
+            appName: "calc",
+            label:   "Calc",
+            icon:    "🧮",
+            title:   "Calc",
+            onClick: (btn) => {
                 if (!calcContainer) component_calc_create();
-                /* After create(), the window's _adoptTrayButton replaced the
-                   button's onclick with its own toggle. That new handler
-                   isn't running for THIS click (we're already inside the
-                   old handler), so explicitly trigger the toggle. */
-                calcServiceWindow._toggleFromTray(calcTrayHandle.button);
+                calcServiceWindow._toggleFromTray(btn);
+            },
+            /* Called on initial registration AND every time the user
+               re-shows the icon via the overflow popup (the DOM node
+               changes each time). Tell the live ServiceWindow about the
+               new button so its outside-click handler and tray-click
+               wiring stay in sync. */
+            onAdopt: (btn) => {
+                if (calcServiceWindow) {
+                    calcServiceWindow._adoptTrayButton(btn, null);
+                }
             }
         });
     }

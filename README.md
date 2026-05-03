@@ -24,6 +24,7 @@ A Tampermonkey userscript that adds a floating, resizable text editor overlay to
 - **Title Bar Buttons** — "↻ Regenerate", "Command", "Check", and "GitHub" buttons in the header for mouse-driven access
 - **Waiting UI** — Spinner and cancel button in the titlebar while waiting for ChatGPT responses
 - **LLM Job Queue** — All prompts go through a FIFO queue that processes one job at a time. Trigger several generations in a row (e.g. Alt+R on multiple tabs) and they run sequentially in the background — switching tabs does not cancel them. The Cancel button aborts the running job and flushes any queued ones.
+- **System Tray Apps** — Lightweight popup-style apps (e.g. the built-in **Calc**) live in a simulated system tray on the desktop shell instead of getting their own launcher button. Click the tray icon to pop the app open just above the tray with an XP-style balloon tail; click anywhere else to dismiss it without losing state. The up-arrow next to the tray opens an overflow popup with a search box where you can launch any tray app or toggle which icons are visible — your choices persist across reloads.
 
 ## Installation
 
@@ -370,7 +371,11 @@ This gives you a one-command launch: run `go run run_app.go` and the editor is u
 - **Storage** — Uses `localStorage` for editor content, window state, and per-tab caches:
   - `tm_editor_content` — Editor text
   - `tm_editor_window_state` — Window geometry, mode, previousBounds
+  - `tm_window_<appName>` — Per-window state for any ServiceWindow-based app (e.g. `tm_window_calc`)
+  - `tm_tray_hidden_apps` — JSON array of tray-app `appName`s the user has hidden
+  - `tm_taskbar_shell_hidden` — Whether the desktop shell is currently hidden
   - `tm_ascii_cache`, `tm_question_cache`, `tm_snippets_cache`, `tm_spreview_cache` — Tab caches
+  - Stale `tm_window_*` and `tm_tray_hidden_apps` entries are pruned automatically on each page load.
 - **ChatGPT Integration** — Interacts with ChatGPT's DOM using `querySelector` on `#prompt-textarea` and `[data-testid="send-button"]`
 - **Two-Column Layout** — Two real `<textarea>` elements with automatic line redistribution based on viewport height
 - **Tab Caching** — Each generated tab stores `{ hash, content }` using djb2 hashing to detect code changes and avoid redundant ChatGPT calls

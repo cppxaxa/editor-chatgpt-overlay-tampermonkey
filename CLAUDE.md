@@ -43,6 +43,45 @@ src/
                                  #   Plus parameter-pure helpers: service_window_make_draggable,
                                  #   service_window_create_resize_handle, service_window_center,
                                  #   service_window_persist_geometry / _restore_geometry.
+                                 #   Tray-mode (opts.tray / opts.trayButton / opts.trayHandle):
+                                 #   _adoptTrayButton hides min/max, installs an outside-click
+                                 #   hider, builds a downward triangular tail anchored to the
+                                 #   tray icon, and patches defaultClose to hide the tail.
+                                 #   _toggleFromTray(btn) shows + snaps the window above the
+                                 #   tray button (or hides if already visible). Re-adoption is
+                                 #   idempotent so the registry can swap buttons when the user
+                                 #   hides/re-shows the icon.
+  service_taskbar.js             # KDE/Ubuntu desktop shell — wallpaper, bottom taskbar,
+                                 #   Start menu, running-apps tracker, system tray, clock.
+                                 #   Patches ServiceWindow.show/hide/defaultMinimize/Maximize
+                                 #   to track open windows in the running-apps list. Also hosts:
+                                 #     service_taskbar_register_tray_app({appName,label,icon,
+                                 #       title,onClick,onAdopt}) — high-level tray registry.
+                                 #       Persists hidden state in localStorage["tm_tray_hidden_apps"];
+                                 #       onAdopt(btn) fires every time a fresh button is created
+                                 #       (initial registration AND each unhide) so callers can
+                                 #       call ServiceWindow._adoptTrayButton on the new node.
+                                 #     service_taskbar_register_tray_icon — low-level: just
+                                 #       creates a tray button. Most apps should use the
+                                 #       _register_tray_app variant instead.
+                                 #     service_taskbar_get_tray_button(appName) — live button
+                                 #       lookup (null if hidden). Used by component_*_create
+                                 #       paths to wire ServiceWindow tray-mode at create time.
+                                 #     service_taskbar_list_tray_apps() — read-only registry
+                                 #       snapshot (used by orphan cleanup).
+                                 #   The up-arrow in the right-side cluster opens a glass popup
+                                 #   listing every registered tray app with: search input,
+                                 #   Launch button, and a Show-in-tray toggle. Toggle flips
+                                 #   recreate/remove the underlying icon synchronously.
+  framework_orphan_cleanup.js    # framework_orphan_cleanup() — one-shot sweep called at the
+                                 #   END of framework_on_init (after every component has
+                                 #   registered). Removes:
+                                 #     - "tm_window_<appName>" entries whose appName isn't in
+                                 #       ServiceWindow._apps.
+                                 #     - "tm_tray_hidden_apps" entries whose appName isn't in
+                                 #       service_taskbar_list_tray_apps().
+                                 #   Does NOT touch tab caches (tm_*_cache) or unknown keys.
+                                 #   Logs a one-line summary via console.log when non-zero.
   component_kiosk.js             # component_kiosk() — auto-open + maximize when
                                  #   localStorage["kiosk"] === "true" (set by run_app.go)
   component_window.js            # editorServiceWindow (= new ServiceWindow) +
@@ -86,7 +125,7 @@ Because everything ends up inside the same IIFE, **JavaScript function-declarati
 
 ### Runtime architecture (within the concatenated IIFE)
 
-- **`framework_init()`** in `footer.js` is the only entry point. It calls `framework_register_launcher()`, attaches `window.addEventListener("resize", framework_on_window_resized)`, runs `framework_on_init()`, then `handle_kiosk()`.
+- **`framework_init()`** in `footer.js` is the only entry point. It calls `framework_register_launcher()`, attaches `window.addEventListener("resize", framework_on_window_resized)`, runs `framework_on_init()`, then `framework_orphan_cleanup()`, then `handle_kiosk()` and `handle_system_restore()`. The cleanup must run AFTER `framework_on_init` so every component has registered with `ServiceWindow._apps` and the tray-app registry — otherwise live entries would be wrongly classified as orphaned.
 - **Lifecycle hooks** in `framework.js` (`framework_on_init`, `framework_on_launcher_registered`, `framework_on_window_resized`) are literal lists of components that react to a framework-level moment. The framework does not reach into component state directly; instead each component exposes `component_<name>_handle_<event>()` and the hook calls it. To add a reactor, append one line to the relevant hook.
 - **`ServiceWindow` (`service_window.js`)** is a generic floating-window class. `editorServiceWindow = new ServiceWindow()` is the single instance held in `component_window.js`. The class owns:
   - DOM construction: container `<div>`, 36px header, tab bar slot, action bar slot, min/max/close cluster, resize handle.
@@ -95,6 +134,8 @@ Because everything ends up inside the same IIFE, **JavaScript function-declarati
   - Tab/action registration: `.registerTab({id,label,title,onClick})` appends a styled tab button (first registered tab is auto-highlighted); `.registerAction({label,title,onClick,html,style})` appends an action button (text or SVG icon, optional style override). `.setActiveTabHighlight(id)` updates which tab button looks active.
   - `.appendControls()` is called by the caller after it has populated its own header content so the min/max/close cluster ends up at the right edge.
   - The class has **no knowledge of the editor's tabs, content elements, or windowMode semantics specific to this app** — those live in the caller's onClick handlers and in `component_window.js`'s min/max/close button bodies.
+- **System tray apps (`service_taskbar.js`)** — A second-class window pattern: instead of a launcher button, the app registers a tray icon via `service_taskbar_register_tray_app({appName, label, icon, title, onClick, onAdopt})`. Click toggles the window. Tray-mode windows are popups: min/max are hidden, the cyan focus border is suppressed, the window snaps above the tray icon on every show with a downward triangular tail decoration anchored to the icon, and any outside-click hides the window (timers/state preserved). The user can hide individual tray icons via the up-arrow overflow popup; `onAdopt(btn)` re-fires every time a fresh button is created (initial registration AND each unhide) so the owning component can call `ServiceWindow._adoptTrayButton` on the new DOM node. `component_calc.js` is the canonical example. Hidden state persists in `localStorage["tm_tray_hidden_apps"]`.
+- **Orphan cleanup (`framework_orphan_cleanup.js`)** — Runs once at the end of `framework_on_init` (after every component has registered). Removes `tm_window_<appName>` entries whose `appName` is no longer in `ServiceWindow._apps`, and prunes `tm_tray_hidden_apps` entries no longer in `service_taskbar_list_tray_apps()`. Does NOT touch tab caches or unknown keys. Logs a one-line summary via `console.log` only when something was actually removed. Add new prefixes here when you introduce new per-app keys.
 - **`createEditor()`** in `component_window.js` is the master DOM wirer: it instantiates `editorServiceWindow`, calls `.create()`, then calls `.registerTab` × 5 (Editor / Ascii / Question / Snippets / S-Preview) and `.registerAction` × 4 (↻ / Command / Check / GitHub). It then builds the editor's own content elements (main textarea, two column textareas, ascii/question/snippets textareas, S-Preview iframe), wires the min/max/close `onclick` bodies (these still know about editor-specific tab content elements), and calls `.appendControls()`. Called lazily on first launcher click.
 - **Tab system** — five tabs (Editor, Ascii design, Question, Snippets, S-Preview). Each generated tab caches `{ hash, content }` in both memory and localStorage. `simpleHash` (djb2) detects code changes; regeneration only happens when hash differs (or explicitly via Alt+R which clears the cache first).
 - **S-Preview** uses an iframe with `srcdoc` for isolated syntax-highlighted HTML rendering. `setSpreviewContent` injects a CSS reset to preserve indentation.
@@ -174,6 +215,9 @@ When working on this codebase, prefer **editing the per-component files under `s
 - `tm_question_cache` — Question tab cache
 - `tm_snippets_cache` — Snippets tab cache
 - `tm_spreview_cache` — S-Preview tab cache
+- `tm_window_<appName>` — Per-window geometry/mode/visibility (auto-persisted by ServiceWindow)
+- `tm_tray_hidden_apps` — JSON array of `appName`s the user has hidden from the system tray via the up-arrow overflow popup. Apps not in the list are visible by default. Stale entries are pruned by `framework_orphan_cleanup` on each page load.
+- `tm_taskbar_shell_hidden` — `"true"` when the user has dismissed the desktop shell via Start menu → "Hide desktop shell"
 
 ## The build tool (`build.go`)
 
