@@ -10,7 +10,8 @@
 function framework_register_launcher() {
 
     framework_launcher_register("E", component_window_launch);
-    framework_launcher_register("C", component_calc_launch);
+    /* Calc lives in the system tray (registered in component_calc_handle_init).
+       Skip the Start-menu launcher to avoid double representation. */
     framework_launcher_register("L", component_localstorage_launch);
 
     framework_on_launcher_registered();

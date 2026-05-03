@@ -662,6 +662,9 @@ function _service_taskbar_find_entry(sw) {
 function _service_taskbar_on_show(sw) {
 
     if (!_taskbar_running_el) return;
+    /* Tray-hosted windows are represented by their tray icon, not by a
+       running-apps button — skip tracking. */
+    if (sw && sw._trayHandle) return;
     if (_service_taskbar_find_entry(sw)) {
         _service_taskbar_update_button(sw);
         return;
@@ -728,6 +731,56 @@ function _service_taskbar_update_button(sw) {
         entry.btn.style.borderBottom = "2px solid #4fc3f7";
         entry.btn.style.color = "white";
     }
+}
+
+/* ---- System tray icons ----
+   Components register a tray icon via service_taskbar_register_tray_icon.
+   Returns a handle so the caller can remove the icon when its window
+   closes. The button's onClick receives the button DOM node so the caller
+   can compute the popup anchor (e.g. ServiceWindow tray-mode positions
+   itself just above this button). */
+
+function service_taskbar_register_tray_icon(opts) {
+
+    service_taskbar_init();
+    if (!_taskbar_tray_el) return null;
+
+    const btn = document.createElement("button");
+    btn.textContent = opts.icon || "?";
+    if (opts.title) btn.title = opts.title;
+
+    Object.assign(btn.style, {
+        background: "transparent",
+        color: "#e6e6e6",
+        border: "1px solid transparent",
+        borderRadius: "3px",
+        cursor: "pointer",
+        padding: "2px 7px",
+        fontSize: "13px",
+        fontWeight: "bold",
+        fontFamily: "inherit",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        minWidth: "22px",
+        height: "26px"
+    });
+
+    btn.onmouseover = () => { btn.style.background = "rgba(255,255,255,0.10)"; };
+    btn.onmouseout  = () => { btn.style.background = "transparent"; };
+    btn.onclick = (e) => {
+        e.stopPropagation();
+        if (opts.onClick) opts.onClick(btn);
+    };
+
+    _taskbar_tray_el.appendChild(btn);
+
+    return {
+        button: btn,
+        remove() {
+            if (btn.parentElement) btn.parentElement.removeChild(btn);
+        }
+    };
 }
 
 function service_taskbar_minimize_window(sw) {

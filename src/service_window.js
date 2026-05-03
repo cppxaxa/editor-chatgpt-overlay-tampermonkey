@@ -200,7 +200,213 @@ class ServiceWindow {
         this.maxBtn.onclick   = () => this.defaultMaximize();
         this.closeBtn.onclick = () => this.defaultClose();
 
+        /* ---- Tray-mode wiring ----
+           Two entry shapes:
+             - opts.tray === true: register a brand-new tray icon now.
+             - opts.trayButton: adopt an existing tray button (typically
+               registered at init time so the icon shows up before the
+               window is lazily created).
+           Either way, click toggles the window: if hidden/minimized, show +
+           snap above tray; if visible, hide. Outside-click anywhere not in
+           the window or tray button hides the window. defaultClose is
+           patched so closing also removes the tray icon. */
+        if (opts.trayButton) {
+            this._adoptTrayButton(opts.trayButton, opts.trayHandle || null);
+        } else if (opts.tray && typeof service_taskbar_register_tray_icon === "function") {
+            this._installTrayMode({
+                icon:  opts.trayIcon  || (opts.appName || "?").charAt(0).toUpperCase(),
+                title: opts.trayTitle || opts.appName
+            });
+        }
+
         return this;
+    }
+
+    _installTrayMode(opts) {
+
+        const handle = service_taskbar_register_tray_icon({
+            icon:    opts.icon,
+            title:   opts.title,
+            onClick: (btn) => this._toggleFromTray(btn)
+        });
+        if (!handle) return;
+        this._adoptTrayButton(handle.button, handle);
+    }
+
+    /* Wire an existing tray button (e.g. one registered at init time before
+       the window was lazily created) to this window. Replaces the button's
+       onClick with our toggle, installs the outside-click hider, builds the
+       tail, and patches defaultClose/hide to clean up. */
+    _adoptTrayButton(btn, handle) {
+
+        this._trayHandle = handle || {
+            button: btn,
+            remove() { if (btn.parentElement) btn.parentElement.removeChild(btn); }
+        };
+
+        btn.onclick = (e) => {
+            e.stopPropagation();
+            this._toggleFromTray(btn);
+        };
+
+        /* Tray apps don't need min/max — they're toggled by the tray icon
+           and naturally close via outside-click. Hide the buttons but leave
+           them in the DOM so any code referencing this.minBtn / this.maxBtn
+           doesn't crash. */
+        if (this.minBtn) this.minBtn.style.display = "none";
+        if (this.maxBtn) this.maxBtn.style.display = "none";
+
+        /* Hide the tail as soon as the user starts dragging the window —
+           the tail is anchored to the tray, so once the window moves the
+           anchor visualisation is wrong (and the half-tail that was
+           hidden behind the window's bottom edge would otherwise
+           reappear as a rhombus). Mirrors XP "tear off the balloon"
+           UX. */
+        if (this.headerEl) {
+            this.headerEl.addEventListener("mousedown", () => {
+                if (this._trayTailEl) this._trayTailEl.style.display = "none";
+            });
+        }
+
+        /* Build the tail decoration once. Absolutely positioned inside the
+           container, anchored to its bottom edge, pointing down toward the
+           tray icon. The tail is a 14px square rotated 45deg with the same
+           background as the container; only its bottom-right edge shows
+           below the container, forming a triangle. The container's
+           overflow:hidden would clip the tail, so we put the tail in a
+           sibling element that's positioned relative to the container at
+           show-time. */
+        const tail = document.createElement("div");
+        Object.assign(tail.style, {
+            position: "fixed",
+            width: "14px",
+            height: "14px",
+            background: "#1e1e1e",
+            border: "1px solid #333",
+            borderTop: "none",
+            borderLeft: "none",
+            transform: "rotate(45deg)",
+            transformOrigin: "center",
+            zIndex: "999998",
+            display: "none",
+            pointerEvents: "none"
+        });
+        document.body.appendChild(tail);
+        this._trayTailEl = tail;
+
+        /* Outside-click hide. Capture phase + checking the original target
+           so we observe clicks before any inner stopPropagation can swallow
+           them. We must NOT hide if the click landed inside this window's
+           container, the tray button, or the tail itself. Per the user's
+           choice (strict), clicks on other ServiceWindows DO hide this one. */
+        this._trayOutsideHandler = (e) => {
+            if (!this.visible) return;
+            if (this.mode === "minimized") return;
+            if (this.container && this.container.contains(e.target)) return;
+            if (btn.contains(e.target)) return;
+            if (tail.contains(e.target)) return;
+            this.hide();
+        };
+        document.addEventListener("mousedown", this._trayOutsideHandler, true);
+
+        /* Patch defaultClose to also hide the tail. The tray icon itself
+           PERSISTS — it's how the user re-launches the app. The icon is
+           only removed if/when the entire app tears down (not currently
+           wired). hide() already runs inside defaultClose via this.hide(). */
+        const origClose = this.defaultClose.bind(this);
+        this.defaultClose = () => {
+            origClose();
+            if (this._trayTailEl) this._trayTailEl.style.display = "none";
+        };
+
+        /* Patch hide() to also hide the tail. show() positioning happens via
+           _toggleFromTray, which paints the tail; if the user calls show()
+           directly (e.g. system_restore), we still re-snap to the tray. */
+        const origHide = this.hide.bind(this);
+        this.hide = () => {
+            origHide();
+            if (this._trayTailEl) this._trayTailEl.style.display = "none";
+        };
+    }
+
+    /* Snap the window above the tray button and show it. Always re-snaps
+       (per user's choice) — any drag is forgotten on next tray click. */
+    _toggleFromTray(btn) {
+
+        if (this.visible && this.mode !== "minimized") {
+            this.hide();
+            return;
+        }
+
+        /* Show first so offsetWidth/Height are valid for the snap math. */
+        this.show();
+
+        if (this.mode === "maximized") return;   // maximized fills viewport; no snap
+        if (this.mode === "minimized") return;   // header-only strip; no snap
+
+        const r = btn.getBoundingClientRect();
+        const cw = this.container.offsetWidth;
+        const ch = this.container.offsetHeight;
+        const vw = window.innerWidth;
+
+        /* Tail geometry. The tail is a `tailSide`-px square rotated 45°.
+           After rotation its bounding diamond is `tailSide * √2` tall,
+           so it extends `tailHalfDiag` px above AND below center. We
+           want only the BOTTOM half visible (a downward triangle), so
+           we place the tail's CSS center exactly at the window's bottom
+           edge — the top half is then hidden behind the opaque window
+           container, and the bottom half pokes down toward the tray. */
+        const tailSide     = 14;
+        const tailHalfDiag = Math.round(tailSide * Math.SQRT2 / 2);   // ~10
+        /* Gap between the window's bottom edge and the tray button top.
+           Needs room for the visible bottom half (`tailHalfDiag`) plus
+           a few px of breathing room. */
+        const tailGap = tailHalfDiag + 6;
+
+        let left = Math.round(r.left + r.width / 2 - cw / 2);
+        left = Math.max(8, Math.min(left, vw - cw - 8));
+
+        /* Window bottom sits `tailGap` px above the tray-button top so the
+           full rotated tail fits cleanly in the gap. */
+        let top = Math.round(r.top - tailGap - ch);
+        top = Math.max(8, top);
+
+        this.container.style.left = left + "px";
+        this.container.style.top  = top  + "px";
+
+        /* Tail: anchored to the horizontal center of the tray button. We
+           position it so the top of the visible diamond aligns with the
+           window's bottom edge (tail appears to "grow out of" the window)
+           and the tip points down at the tray icon. Hidden if the window
+           had to clamp far enough that the tail center would no longer be
+           horizontally under the window. */
+        if (this._trayTailEl) {
+            const tailCenterX  = Math.round(r.left + r.width / 2);
+            const windowBottom = top + ch;
+            /* Place the tail's CSS center exactly at the window's bottom
+               edge. After rotation, only the bottom half of the diamond
+               extends below the window — that's the visible triangle.
+               The top half is occluded by the opaque window container. */
+            const tailCenterY  = windowBottom;
+            const tailLeft = tailCenterX - tailSide / 2;
+            const tailTop  = tailCenterY - tailSide / 2;
+
+            const tailWithinWindow =
+                tailCenterX >= left + tailHalfDiag &&
+                tailCenterX <= left + cw - tailHalfDiag;
+
+            if (tailWithinWindow) {
+                this._trayTailEl.style.width  = tailSide + "px";
+                this._trayTailEl.style.height = tailSide + "px";
+                this._trayTailEl.style.left = tailLeft + "px";
+                this._trayTailEl.style.top  = tailTop  + "px";
+                this._trayTailEl.style.display = "block";
+            } else {
+                this._trayTailEl.style.display = "none";
+            }
+        }
+
+        this.persistState();
     }
 
     /* ---- Active window tracking ----
@@ -236,9 +442,14 @@ class ServiceWindow {
         for (const w of ServiceWindow._instances) {
             if (!w.container) continue;
             /* Maximised windows reach to the viewport edges — a 1px cyan
-               accent there reads as a stray line, not as focus. So the
-               cyan only paints on active AND not-maximised windows. */
-            const isActive = (w === ServiceWindow._active) && (w.mode !== "maximized");
+               accent there reads as a stray line, not as focus. Tray-mode
+               windows are popups, not persistent app windows, so the cyan
+               focus border reads as noise on them too. Cyan only paints on
+               active, not-maximised, non-tray windows. */
+            const isActive =
+                (w === ServiceWindow._active) &&
+                (w.mode !== "maximized") &&
+                !w._trayHandle;
             w.container.style.borderColor = isActive ? "#4fc3f7" : "#333";
         }
     }
