@@ -10,14 +10,16 @@
 function framework_register_launcher() {
 
     framework_launcher_register("Code Editor", component_window_launch, {
-        icon:  "📝",
-        title: "Code Editor"
+        appName: "editor",
+        icon:    "📝",
+        title:   "Code Editor"
     });
     /* Calc lives in the system tray (registered in component_calc_handle_init).
        Skip the Start-menu launcher to avoid double representation. */
     framework_launcher_register("Local Storage", component_localstorage_launch, {
-        icon:  "🗂️",
-        title: "Local Storage"
+        appName: "localstorage",
+        icon:    "🗂️",
+        title:   "Local Storage"
     });
 
     framework_on_launcher_registered();

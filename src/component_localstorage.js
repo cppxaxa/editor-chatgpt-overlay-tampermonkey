@@ -21,7 +21,7 @@ function component_localstorage_create() {
 
     lsServiceWindow = new ServiceWindow();
     lsServiceWindow.create({
-        appName: "localstorage",
+        appName:  "localstorage",
         width:  700,
         height: 500,
         isDraggable: () => true,

@@ -46,7 +46,7 @@ function createEditor() {
 
     editorServiceWindow = new ServiceWindow();
     editorServiceWindow.create({
-        appName: "editor",
+        appName:  "editor",
         width:  500,
         height: 350,
         isDraggable: () => editorServiceWindow.mode !== "maximized",

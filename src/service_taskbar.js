@@ -72,10 +72,54 @@ function service_taskbar_register_app(label, onlaunch, opts) {
     _taskbar_apps.push({
         label:    label,
         onlaunch: onlaunch,
-        icon:     opts.icon  || null,
-        title:    opts.title || null
+        icon:     opts.icon    || null,
+        title:    opts.title   || null,
+        appName:  opts.appName || null   // for taskbar-icon lookup by ServiceWindow.appName
     });
     _service_taskbar_rebuild_start_list("");
+}
+
+/* Resolve a human-readable label for an app by its ServiceWindow.appName.
+   Looks up tray/Start-menu registries so the taskbar shows "Calculator"
+   instead of "calc" and "Code Editor" instead of "editor". Falls back to
+   the appName (capitalised) when no registration matches. */
+function service_taskbar_get_app_label(appName) {
+    if (!appName) return "Window";
+
+    const trayApp = _tray_apps.find(a =>
+        a.appName === appName || a.label === appName);
+    if (trayApp && trayApp.title) return trayApp.title;
+    if (trayApp && trayApp.label) return trayApp.label;
+
+    const startApp = _taskbar_apps.find(a =>
+        a.appName === appName || a.label === appName);
+    if (startApp && startApp.title) return startApp.title;
+    if (startApp && startApp.label) return startApp.label;
+
+    /* No registry entry — capitalise appName as a last resort. */
+    return appName.charAt(0).toUpperCase() + appName.slice(1);
+}
+
+/* Resolve an icon (inline HTML — emoji or SVG) for an app by its
+   ServiceWindow.appName. Looks up the system-tray registry first (most
+   specific), then the Start-menu app registry. Returns null if no icon
+   is registered under that name. Used by the taskbar's running-apps
+   button renderer to give every open window a recognisable glyph. */
+function service_taskbar_get_app_icon(appName) {
+    if (!appName) return null;
+
+    /* Tray-app registry — also try matching by label since some callers
+       might use that instead of appName. */
+    const trayApp = _tray_apps.find(a =>
+        a.appName === appName || a.label === appName);
+    if (trayApp && trayApp.icon) return trayApp.icon;
+
+    /* Start-menu app registry — try appName field, then label. */
+    const startApp = _taskbar_apps.find(a =>
+        a.appName === appName || a.label === appName);
+    if (startApp && startApp.icon) return startApp.icon;
+
+    return null;
 }
 
 /* ---- Wallpaper ---- */
@@ -652,6 +696,13 @@ function _service_taskbar_toggle_start_menu() {
     if (!_taskbar_start_menu) return;
     if (_taskbar_start_menu.style.display === "none") {
         _taskbar_start_menu.style.display = "flex";
+        /* Always paint above whatever window currently has focus.
+           ServiceWindow._zCounter is bumped on every focus, unbounded — so a
+           static z-index on the menu eventually loses. Sync past the live max
+           every time we open. */
+        if (typeof ServiceWindow !== "undefined" && ServiceWindow._zCounter) {
+            _taskbar_start_menu.style.zIndex = String(ServiceWindow._zCounter + 10);
+        }
         _taskbar_start_search.value = "";
         _service_taskbar_rebuild_start_list("");
         setTimeout(() => _taskbar_start_search.focus(), 0);
@@ -747,25 +798,103 @@ function _service_taskbar_on_show(sw) {
         return;
     }
 
-    const label = sw.appName || "Window";
+    /* Resolve a label and icon for the taskbar button. Both are looked up
+       by appName from the tray/Start-menu registries — apps register their
+       icon/title once and every running-apps button picks it up
+       automatically. So an editor window with appName="editor" shows up as
+       "Code Editor" with a 📝 glyph, not raw "editor". */
+    const label = service_taskbar_get_app_label(sw.appName);
+    const icon  = service_taskbar_get_app_icon(sw.appName);
 
     const btn = document.createElement("button");
-    btn.textContent = label;
+    btn.title = label;
+
+    /* Glassy resting state. The outer + inner shadows give the pill a
+       slight inset, then the top highlight + bottom accent (set in
+       _update_button) read as a translucent Windows/KDE taskbar tile. */
+    const restBg   = "linear-gradient(180deg, rgba(255,255,255,0.10) 0%, rgba(255,255,255,0.04) 100%)";
+    const hoverBg  = "linear-gradient(180deg, rgba(255,255,255,0.18) 0%, rgba(255,255,255,0.08) 100%)";
+    const activeBg = "linear-gradient(180deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 100%)";
+
     Object.assign(btn.style, {
-        background: "rgba(255,255,255,0.08)",
-        color: "white",
-        border: "1px solid rgba(255,255,255,0.12)",
-        borderRadius: "3px",
-        padding: "4px 10px",
+        display: "flex",
+        alignItems: "center",
+        gap: "8px",
+        background: restBg,
+        color: "#f0f0f0",
+        border: "1px solid rgba(255,255,255,0.14)",
+        borderRadius: "5px",
+        padding: "5px 12px",
+        height: "30px",
+        boxSizing: "border-box",
         cursor: "pointer",
         fontSize: "12px",
         fontFamily: "inherit",
-        maxWidth: "180px",
+        maxWidth: "210px",
+        flexShrink: "0",
+        boxShadow:
+            "inset 0 1px 0 rgba(255,255,255,0.10)," +
+            "0 1px 2px rgba(0,0,0,0.25)",
+        transition: "background 120ms ease, transform 80ms ease, box-shadow 120ms ease"
+    });
+
+    btn._restBg   = restBg;
+    btn._hoverBg  = hoverBg;
+    btn._activeBg = activeBg;
+
+    btn.onmouseover = () => { btn.style.background = hoverBg; };
+    btn.onmouseout  = () => { btn.style.background = btn._currentBg || restBg; };
+    btn.onmousedown = () => {
+        btn.style.background = activeBg;
+        btn.style.transform  = "translateY(1px)";
+        btn.style.boxShadow  = "inset 0 1px 2px rgba(0,0,0,0.35)";
+    };
+    btn.onmouseup   = () => {
+        btn.style.transform = "none";
+        btn.style.boxShadow =
+            "inset 0 1px 0 rgba(255,255,255,0.10)," +
+            "0 1px 2px rgba(0,0,0,0.25)";
+    };
+
+    /* Icon slot — fixed 16px so labels line up across rows. Emoji-friendly
+       font stack so emoji glyphs render at full size; SVG strings render
+       via innerHTML. Tile fallback (first letter) keeps alignment when no
+       icon was supplied. */
+    const iconEl = document.createElement("span");
+    Object.assign(iconEl.style, {
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: "16px",
+        height: "16px",
+        flexShrink: "0",
+        fontSize: "14px",
+        lineHeight: "1",
+        color: "#e6e8ee",
+        fontFamily: "'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', system-ui, sans-serif"
+    });
+    if (icon) {
+        iconEl.innerHTML = icon;
+    } else {
+        iconEl.textContent = (label || "?").charAt(0).toUpperCase();
+        iconEl.style.background = "rgba(255,255,255,0.16)";
+        iconEl.style.borderRadius = "3px";
+        iconEl.style.fontSize = "10px";
+        iconEl.style.fontWeight = "bold";
+    }
+    btn.appendChild(iconEl);
+
+    const labelEl = document.createElement("span");
+    labelEl.textContent = label;
+    Object.assign(labelEl.style, {
         whiteSpace: "nowrap",
         overflow: "hidden",
         textOverflow: "ellipsis",
-        flexShrink: "0"
+        minWidth: "0",
+        fontWeight: "500",
+        letterSpacing: "0.1px"
     });
+    btn.appendChild(labelEl);
 
     btn.onclick = () => {
         if (!sw.visible) {
@@ -799,14 +928,33 @@ function _service_taskbar_update_button(sw) {
     const entry = _service_taskbar_find_entry(sw);
     if (!entry) return;
 
+    const btn = entry.btn;
+    const restBg  = btn._restBg  || "rgba(255,255,255,0.08)";
+    const hoverBg = btn._hoverBg || "rgba(255,255,255,0.18)";
+
     if (sw.mode === "minimized") {
-        entry.btn.style.background = "rgba(255,255,255,0.04)";
-        entry.btn.style.borderBottom = "1px solid rgba(255,255,255,0.12)";
-        entry.btn.style.color = "#aaa";
+        /* Dim + no accent — clearly "parked". */
+        btn._currentBg = restBg;
+        btn.style.background = restBg;
+        btn.style.color = "#9aa0aa";
+        btn.style.opacity = "0.75";
+        btn.style.borderBottom = "1px solid rgba(255,255,255,0.14)";
+        btn.style.boxShadow =
+            "inset 0 1px 0 rgba(255,255,255,0.08)," +
+            "0 1px 2px rgba(0,0,0,0.20)";
     } else {
-        entry.btn.style.background = "rgba(255,255,255,0.14)";
-        entry.btn.style.borderBottom = "2px solid #4fc3f7";
-        entry.btn.style.color = "white";
+        /* Active: brighter fill + crisp 2px cyan accent at the bottom edge.
+           Cache the brighter fill as the "current" background so onmouseout
+           reverts to it (not the dim resting state). */
+        btn._currentBg = hoverBg;
+        btn.style.background = hoverBg;
+        btn.style.color = "white";
+        btn.style.opacity = "1";
+        btn.style.borderBottom = "2px solid #4fc3f7";
+        btn.style.boxShadow =
+            "inset 0 1px 0 rgba(255,255,255,0.18)," +
+            "0 2px 6px rgba(0,0,0,0.30)," +
+            "0 0 0 1px rgba(79,195,247,0.18)";
     }
 }
 
