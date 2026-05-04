@@ -161,20 +161,18 @@ function _service_taskbar_build_wallpaper() {
     /* Try a few conventional names; first hit wins. service_fs_get returns
        null (not throws) for missing keys, so the gradient fallback persists
        cleanly when nothing matches. */
-    if (typeof service_fs_get === "function") {
-        (async () => {
-            for (const name of ["wallpaper.jpg", "wallpaper.png", "wallpaper.webp", "wallpaper.jpeg"]) {
-                try {
-                    const f = await service_fs_get(name);
-                    if (f && f.dataUrl) {
-                        wp.style.background =
-                            "center/cover no-repeat url('" + f.dataUrl + "')";
-                        return;
-                    }
-                } catch (e) { /* keep trying / fall through to gradient */ }
-            }
-        })();
-    }
+    (async () => {
+        for (const name of ["wallpaper.jpg", "wallpaper.png", "wallpaper.webp", "wallpaper.jpeg"]) {
+            try {
+                const f = await service_fs_get(name);
+                if (f && f.dataUrl) {
+                    wp.style.background =
+                        "center/cover no-repeat url('" + f.dataUrl + "')";
+                    return;
+                }
+            } catch (e) { /* keep trying / fall through to gradient */ }
+        }
+    })();
 }
 
 /* ---- Taskbar ---- */
@@ -777,8 +775,6 @@ function _service_taskbar_install_hotkey() {
 /* ---- Open-windows tracking ---- */
 
 function _service_taskbar_patch_service_window() {
-
-    if (typeof ServiceWindow === "undefined") return;
 
     const origShow = ServiceWindow.prototype.show;
     const origHide = ServiceWindow.prototype.hide;

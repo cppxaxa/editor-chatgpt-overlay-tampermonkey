@@ -66,8 +66,7 @@ async function _console_drain_queue() {
                console.*, and returns { result, error }. If the component
                window has not been created yet, lazy-create it so output is
                visible. */
-            if (typeof component_console_create === "function" &&
-                typeof consoleContainer !== "undefined" &&
+            if (typeof consoleContainer !== "undefined" &&
                 consoleContainer === null) {
                 component_console_create();
             }

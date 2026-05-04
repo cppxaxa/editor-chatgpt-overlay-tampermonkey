@@ -139,9 +139,7 @@ function component_calc_create() {
        create() installs the tray-mode patches: hidden min/max, outside-click
        hide, downward tail, defaultClose tail-hide. The registry's onAdopt
        will keep this in sync if the button is later replaced. */
-    const trayBtn = (typeof service_taskbar_get_tray_button === "function")
-        ? service_taskbar_get_tray_button("calc")
-        : null;
+    const trayBtn = service_taskbar_get_tray_button("calc");
 
     calcServiceWindow = new ServiceWindow();
     calcServiceWindow.create({
@@ -207,28 +205,26 @@ function component_calc_create() {
 function component_calc_handle_init() {
     ServiceWindow.registerApp("calc", component_calc_launch);
 
-    if (typeof service_taskbar_register_tray_app === "function") {
-        service_taskbar_register_tray_app({
-            appName: "calc",
-            label:   "Calc",
-            icon:    CALC_ICON_SVG,
-            title:   "Calculator",
-            onClick: (btn) => {
-                if (!calcContainer) component_calc_create();
-                calcServiceWindow._toggleFromTray(btn);
-            },
-            /* Called on initial registration AND every time the user
-               re-shows the icon via the overflow popup (the DOM node
-               changes each time). Tell the live ServiceWindow about the
-               new button so its outside-click handler and tray-click
-               wiring stay in sync. */
-            onAdopt: (btn) => {
-                if (calcServiceWindow) {
-                    calcServiceWindow._adoptTrayButton(btn, null);
-                }
+    service_taskbar_register_tray_app({
+        appName: "calc",
+        label:   "Calc",
+        icon:    CALC_ICON_SVG,
+        title:   "Calculator",
+        onClick: (btn) => {
+            if (!calcContainer) component_calc_create();
+            calcServiceWindow._toggleFromTray(btn);
+        },
+        /* Called on initial registration AND every time the user
+           re-shows the icon via the overflow popup (the DOM node
+           changes each time). Tell the live ServiceWindow about the
+           new button so its outside-click handler and tray-click
+           wiring stay in sync. */
+        onAdopt: (btn) => {
+            if (calcServiceWindow) {
+                calcServiceWindow._adoptTrayButton(btn, null);
             }
-        });
-    }
+        }
+    });
 }
 
 // ===== src/component_chat.js =====
@@ -271,9 +267,7 @@ function component_chat_launch() {
 
 function component_chat_create() {
 
-    const trayBtn = (typeof service_taskbar_get_tray_button === "function")
-        ? service_taskbar_get_tray_button("chat")
-        : null;
+    const trayBtn = service_taskbar_get_tray_button("chat");
 
     chatServiceWindow = new ServiceWindow();
     chatServiceWindow.create({
@@ -414,7 +408,7 @@ function _chat_do_send() {
                     chatServiceWindow.visible &&
                     chatServiceWindow.mode !== "minimized";
 
-                if (!chatVisible && typeof service_toast_show === "function") {
+                if (!chatVisible) {
                     const raw = (ctx.result || "").trim();
                     const preview = raw.length > 60
                         ? raw.slice(0, 60) + "…"
@@ -497,23 +491,21 @@ function _chat_append_waiting() {
 function component_chat_handle_init() {
     ServiceWindow.registerApp("chat", component_chat_launch);
 
-    if (typeof service_taskbar_register_tray_app === "function") {
-        service_taskbar_register_tray_app({
-            appName: "chat",
-            label:   "Chat",
-            icon:    CHAT_ICON_SVG,
-            title:   "Chat",
-            onClick: (btn) => {
-                if (!chatContainer) component_chat_create();
-                chatServiceWindow._toggleFromTray(btn);
-            },
-            onAdopt: (btn) => {
-                if (chatServiceWindow) {
-                    chatServiceWindow._adoptTrayButton(btn, null);
-                }
+    service_taskbar_register_tray_app({
+        appName: "chat",
+        label:   "Chat",
+        icon:    CHAT_ICON_SVG,
+        title:   "Chat",
+        onClick: (btn) => {
+            if (!chatContainer) component_chat_create();
+            chatServiceWindow._toggleFromTray(btn);
+        },
+        onAdopt: (btn) => {
+            if (chatServiceWindow) {
+                chatServiceWindow._adoptTrayButton(btn, null);
             }
-        });
-    }
+        }
+    });
 }
 
 // ===== src/component_codecheck.js =====
@@ -864,9 +856,7 @@ function component_console_launch() {
 
 function component_console_create() {
 
-    const trayBtn = (typeof service_taskbar_get_tray_button === "function")
-        ? service_taskbar_get_tray_button("console")
-        : null;
+    const trayBtn = service_taskbar_get_tray_button("console");
 
     consoleServiceWindow = new ServiceWindow();
     consoleServiceWindow.create({
@@ -1194,24 +1184,22 @@ function component_console_execute(cmd) {
 function component_console_handle_init() {
     ServiceWindow.registerApp("console", component_console_launch);
 
-    if (typeof service_taskbar_register_tray_app === "function") {
-        service_taskbar_register_tray_app({
-            appName: "console",
-            label:   "Console",
-            icon:    CONSOLE_ICON_SVG,
-            title:   "JS Console",
-            onClick: (btn) => {
-                if (!consoleContainer) component_console_create();
-                consoleServiceWindow._toggleFromTray(btn);
-                setTimeout(() => { if (consoleInputEl) consoleInputEl.focus(); }, 0);
-            },
-            onAdopt: (btn) => {
-                if (consoleServiceWindow) {
-                    consoleServiceWindow._adoptTrayButton(btn, null);
-                }
+    service_taskbar_register_tray_app({
+        appName: "console",
+        label:   "Console",
+        icon:    CONSOLE_ICON_SVG,
+        title:   "JS Console",
+        onClick: (btn) => {
+            if (!consoleContainer) component_console_create();
+            consoleServiceWindow._toggleFromTray(btn);
+            setTimeout(() => { if (consoleInputEl) consoleInputEl.focus(); }, 0);
+        },
+        onAdopt: (btn) => {
+            if (consoleServiceWindow) {
+                consoleServiceWindow._adoptTrayButton(btn, null);
             }
-        });
-    }
+        }
+    });
 }
 
 // ===== src/component_editor.js =====
@@ -2456,8 +2444,8 @@ function showWaitingUI() {
 
     cancelBtn.onclick = (e) => {
         e.stopPropagation();
-        if (typeof flushLlmQueue === "function") flushLlmQueue();
-        if (typeof cancelCurrentLlmJob === "function") cancelCurrentLlmJob();
+        flushLlmQueue();
+        cancelCurrentLlmJob();
     };
 
     if (actionBtns) {
@@ -3092,27 +3080,25 @@ function framework_orphan_cleanup() {
     /* ---- Tray-hidden list ---- */
 
     let removedTray = 0;
-    if (typeof service_taskbar_list_tray_apps === "function") {
-        try {
-            const liveTrayNames = new Set(
-                service_taskbar_list_tray_apps().map(a => a.appName)
-            );
-            const raw = localStorage.getItem("tm_tray_hidden_apps");
-            if (raw) {
-                const arr = JSON.parse(raw);
-                if (Array.isArray(arr)) {
-                    const filtered = arr.filter(n => liveTrayNames.has(n));
-                    if (filtered.length !== arr.length) {
-                        removedTray = arr.length - filtered.length;
-                        localStorage.setItem(
-                            "tm_tray_hidden_apps",
-                            JSON.stringify(filtered)
-                        );
-                    }
+    try {
+        const liveTrayNames = new Set(
+            service_taskbar_list_tray_apps().map(a => a.appName)
+        );
+        const raw = localStorage.getItem("tm_tray_hidden_apps");
+        if (raw) {
+            const arr = JSON.parse(raw);
+            if (Array.isArray(arr)) {
+                const filtered = arr.filter(n => liveTrayNames.has(n));
+                if (filtered.length !== arr.length) {
+                    removedTray = arr.length - filtered.length;
+                    localStorage.setItem(
+                        "tm_tray_hidden_apps",
+                        JSON.stringify(filtered)
+                    );
                 }
             }
-        } catch (e) { /* best-effort */ }
-    }
+        }
+    } catch (e) { /* best-effort */ }
 
     if (removedWindow || removedTray) {
         console.log(
@@ -3283,8 +3269,7 @@ async function _console_drain_queue() {
                console.*, and returns { result, error }. If the component
                window has not been created yet, lazy-create it so output is
                visible. */
-            if (typeof component_console_create === "function" &&
-                typeof consoleContainer !== "undefined" &&
+            if (typeof consoleContainer !== "undefined" &&
                 consoleContainer === null) {
                 component_console_create();
             }
@@ -4290,20 +4275,18 @@ function _service_taskbar_build_wallpaper() {
     /* Try a few conventional names; first hit wins. service_fs_get returns
        null (not throws) for missing keys, so the gradient fallback persists
        cleanly when nothing matches. */
-    if (typeof service_fs_get === "function") {
-        (async () => {
-            for (const name of ["wallpaper.jpg", "wallpaper.png", "wallpaper.webp", "wallpaper.jpeg"]) {
-                try {
-                    const f = await service_fs_get(name);
-                    if (f && f.dataUrl) {
-                        wp.style.background =
-                            "center/cover no-repeat url('" + f.dataUrl + "')";
-                        return;
-                    }
-                } catch (e) { /* keep trying / fall through to gradient */ }
-            }
-        })();
-    }
+    (async () => {
+        for (const name of ["wallpaper.jpg", "wallpaper.png", "wallpaper.webp", "wallpaper.jpeg"]) {
+            try {
+                const f = await service_fs_get(name);
+                if (f && f.dataUrl) {
+                    wp.style.background =
+                        "center/cover no-repeat url('" + f.dataUrl + "')";
+                    return;
+                }
+            } catch (e) { /* keep trying / fall through to gradient */ }
+        }
+    })();
 }
 
 /* ---- Taskbar ---- */
@@ -6597,7 +6580,7 @@ class ServiceWindow {
            patched so closing also removes the tray icon. */
         if (opts.trayButton) {
             this._adoptTrayButton(opts.trayButton, opts.trayHandle || null);
-        } else if (opts.tray && typeof service_taskbar_register_tray_icon === "function") {
+        } else if (opts.tray) {
             this._installTrayMode({
                 icon:  opts.trayIcon  || (opts.appName || "?").charAt(0).toUpperCase(),
                 title: opts.trayTitle || opts.appName

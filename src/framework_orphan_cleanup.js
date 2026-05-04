@@ -58,27 +58,25 @@ function framework_orphan_cleanup() {
     /* ---- Tray-hidden list ---- */
 
     let removedTray = 0;
-    if (typeof service_taskbar_list_tray_apps === "function") {
-        try {
-            const liveTrayNames = new Set(
-                service_taskbar_list_tray_apps().map(a => a.appName)
-            );
-            const raw = localStorage.getItem("tm_tray_hidden_apps");
-            if (raw) {
-                const arr = JSON.parse(raw);
-                if (Array.isArray(arr)) {
-                    const filtered = arr.filter(n => liveTrayNames.has(n));
-                    if (filtered.length !== arr.length) {
-                        removedTray = arr.length - filtered.length;
-                        localStorage.setItem(
-                            "tm_tray_hidden_apps",
-                            JSON.stringify(filtered)
-                        );
-                    }
+    try {
+        const liveTrayNames = new Set(
+            service_taskbar_list_tray_apps().map(a => a.appName)
+        );
+        const raw = localStorage.getItem("tm_tray_hidden_apps");
+        if (raw) {
+            const arr = JSON.parse(raw);
+            if (Array.isArray(arr)) {
+                const filtered = arr.filter(n => liveTrayNames.has(n));
+                if (filtered.length !== arr.length) {
+                    removedTray = arr.length - filtered.length;
+                    localStorage.setItem(
+                        "tm_tray_hidden_apps",
+                        JSON.stringify(filtered)
+                    );
                 }
             }
-        } catch (e) { /* best-effort */ }
-    }
+        }
+    } catch (e) { /* best-effort */ }
 
     if (removedWindow || removedTray) {
         console.log(

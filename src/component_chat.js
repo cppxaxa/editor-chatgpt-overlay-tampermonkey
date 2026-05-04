@@ -37,9 +37,7 @@ function component_chat_launch() {
 
 function component_chat_create() {
 
-    const trayBtn = (typeof service_taskbar_get_tray_button === "function")
-        ? service_taskbar_get_tray_button("chat")
-        : null;
+    const trayBtn = service_taskbar_get_tray_button("chat");
 
     chatServiceWindow = new ServiceWindow();
     chatServiceWindow.create({
@@ -180,7 +178,7 @@ function _chat_do_send() {
                     chatServiceWindow.visible &&
                     chatServiceWindow.mode !== "minimized";
 
-                if (!chatVisible && typeof service_toast_show === "function") {
+                if (!chatVisible) {
                     const raw = (ctx.result || "").trim();
                     const preview = raw.length > 60
                         ? raw.slice(0, 60) + "…"
@@ -263,21 +261,19 @@ function _chat_append_waiting() {
 function component_chat_handle_init() {
     ServiceWindow.registerApp("chat", component_chat_launch);
 
-    if (typeof service_taskbar_register_tray_app === "function") {
-        service_taskbar_register_tray_app({
-            appName: "chat",
-            label:   "Chat",
-            icon:    CHAT_ICON_SVG,
-            title:   "Chat",
-            onClick: (btn) => {
-                if (!chatContainer) component_chat_create();
-                chatServiceWindow._toggleFromTray(btn);
-            },
-            onAdopt: (btn) => {
-                if (chatServiceWindow) {
-                    chatServiceWindow._adoptTrayButton(btn, null);
-                }
+    service_taskbar_register_tray_app({
+        appName: "chat",
+        label:   "Chat",
+        icon:    CHAT_ICON_SVG,
+        title:   "Chat",
+        onClick: (btn) => {
+            if (!chatContainer) component_chat_create();
+            chatServiceWindow._toggleFromTray(btn);
+        },
+        onAdopt: (btn) => {
+            if (chatServiceWindow) {
+                chatServiceWindow._adoptTrayButton(btn, null);
             }
-        });
-    }
+        }
+    });
 }

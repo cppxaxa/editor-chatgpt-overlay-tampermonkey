@@ -212,7 +212,7 @@ class ServiceWindow {
            patched so closing also removes the tray icon. */
         if (opts.trayButton) {
             this._adoptTrayButton(opts.trayButton, opts.trayHandle || null);
-        } else if (opts.tray && typeof service_taskbar_register_tray_icon === "function") {
+        } else if (opts.tray) {
             this._installTrayMode({
                 icon:  opts.trayIcon  || (opts.appName || "?").charAt(0).toUpperCase(),
                 title: opts.trayTitle || opts.appName

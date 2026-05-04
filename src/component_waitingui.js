@@ -55,8 +55,8 @@ function showWaitingUI() {
 
     cancelBtn.onclick = (e) => {
         e.stopPropagation();
-        if (typeof flushLlmQueue === "function") flushLlmQueue();
-        if (typeof cancelCurrentLlmJob === "function") cancelCurrentLlmJob();
+        flushLlmQueue();
+        cancelCurrentLlmJob();
     };
 
     if (actionBtns) {

@@ -42,9 +42,7 @@ function component_console_launch() {
 
 function component_console_create() {
 
-    const trayBtn = (typeof service_taskbar_get_tray_button === "function")
-        ? service_taskbar_get_tray_button("console")
-        : null;
+    const trayBtn = service_taskbar_get_tray_button("console");
 
     consoleServiceWindow = new ServiceWindow();
     consoleServiceWindow.create({
@@ -372,22 +370,20 @@ function component_console_execute(cmd) {
 function component_console_handle_init() {
     ServiceWindow.registerApp("console", component_console_launch);
 
-    if (typeof service_taskbar_register_tray_app === "function") {
-        service_taskbar_register_tray_app({
-            appName: "console",
-            label:   "Console",
-            icon:    CONSOLE_ICON_SVG,
-            title:   "JS Console",
-            onClick: (btn) => {
-                if (!consoleContainer) component_console_create();
-                consoleServiceWindow._toggleFromTray(btn);
-                setTimeout(() => { if (consoleInputEl) consoleInputEl.focus(); }, 0);
-            },
-            onAdopt: (btn) => {
-                if (consoleServiceWindow) {
-                    consoleServiceWindow._adoptTrayButton(btn, null);
-                }
+    service_taskbar_register_tray_app({
+        appName: "console",
+        label:   "Console",
+        icon:    CONSOLE_ICON_SVG,
+        title:   "JS Console",
+        onClick: (btn) => {
+            if (!consoleContainer) component_console_create();
+            consoleServiceWindow._toggleFromTray(btn);
+            setTimeout(() => { if (consoleInputEl) consoleInputEl.focus(); }, 0);
+        },
+        onAdopt: (btn) => {
+            if (consoleServiceWindow) {
+                consoleServiceWindow._adoptTrayButton(btn, null);
             }
-        });
-    }
+        }
+    });
 }

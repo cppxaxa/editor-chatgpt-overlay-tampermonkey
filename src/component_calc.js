@@ -44,9 +44,7 @@ function component_calc_create() {
        create() installs the tray-mode patches: hidden min/max, outside-click
        hide, downward tail, defaultClose tail-hide. The registry's onAdopt
        will keep this in sync if the button is later replaced. */
-    const trayBtn = (typeof service_taskbar_get_tray_button === "function")
-        ? service_taskbar_get_tray_button("calc")
-        : null;
+    const trayBtn = service_taskbar_get_tray_button("calc");
 
     calcServiceWindow = new ServiceWindow();
     calcServiceWindow.create({
@@ -112,26 +110,24 @@ function component_calc_create() {
 function component_calc_handle_init() {
     ServiceWindow.registerApp("calc", component_calc_launch);
 
-    if (typeof service_taskbar_register_tray_app === "function") {
-        service_taskbar_register_tray_app({
-            appName: "calc",
-            label:   "Calc",
-            icon:    CALC_ICON_SVG,
-            title:   "Calculator",
-            onClick: (btn) => {
-                if (!calcContainer) component_calc_create();
-                calcServiceWindow._toggleFromTray(btn);
-            },
-            /* Called on initial registration AND every time the user
-               re-shows the icon via the overflow popup (the DOM node
-               changes each time). Tell the live ServiceWindow about the
-               new button so its outside-click handler and tray-click
-               wiring stay in sync. */
-            onAdopt: (btn) => {
-                if (calcServiceWindow) {
-                    calcServiceWindow._adoptTrayButton(btn, null);
-                }
+    service_taskbar_register_tray_app({
+        appName: "calc",
+        label:   "Calc",
+        icon:    CALC_ICON_SVG,
+        title:   "Calculator",
+        onClick: (btn) => {
+            if (!calcContainer) component_calc_create();
+            calcServiceWindow._toggleFromTray(btn);
+        },
+        /* Called on initial registration AND every time the user
+           re-shows the icon via the overflow popup (the DOM node
+           changes each time). Tell the live ServiceWindow about the
+           new button so its outside-click handler and tray-click
+           wiring stay in sync. */
+        onAdopt: (btn) => {
+            if (calcServiceWindow) {
+                calcServiceWindow._adoptTrayButton(btn, null);
             }
-        });
-    }
+        }
+    });
 }
