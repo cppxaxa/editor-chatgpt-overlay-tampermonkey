@@ -90,6 +90,12 @@ function component_clock_create() {
     clockServiceWindow.appendControls();
     clockContainer = clockServiceWindow.container;
 
+    /* Window-scoped hotkeys — only fire when this window is active. */
+    service_hotkeys_register(clockServiceWindow, "alt+1", () => _clock_switch_tab("clock"));
+    service_hotkeys_register(clockServiceWindow, "alt+2", () => _clock_switch_tab("alarm"));
+    service_hotkeys_register(clockServiceWindow, "alt+3", () => _clock_switch_tab("stopwatch"));
+    service_hotkeys_register(clockServiceWindow, "alt+4", () => _clock_switch_tab("timer"));
+
     // Build tab panels
     _clock_build_clock_panel();
     _clock_build_alarm_panel();

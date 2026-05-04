@@ -114,6 +114,18 @@ function createEditor() {
        header content so it lands at the right edge of the header. */
     editorServiceWindow.appendControls();
 
+    /* Window-scoped hotkeys — dispatched by service_hotkeys.js only when this
+       window is the active one. Ctrl+Z/Y stay on the textarea (see
+       attachEditorKeydown) but are gated on this window being active. */
+    service_hotkeys_register(editorServiceWindow, "alt+1", () => switchTab("editor"));
+    service_hotkeys_register(editorServiceWindow, "alt+2", () => switchTab("ascii"));
+    service_hotkeys_register(editorServiceWindow, "alt+3", () => switchTab("question"));
+    service_hotkeys_register(editorServiceWindow, "alt+4", () => switchTab("snippets"));
+    service_hotkeys_register(editorServiceWindow, "alt+5", () => switchTab("spreview"));
+    service_hotkeys_register(editorServiceWindow, "alt+i", () => handleLineAction());
+    service_hotkeys_register(editorServiceWindow, "alt+c", () => handleCodeCheck());
+    service_hotkeys_register(editorServiceWindow, "alt+r", () => regenerateCurrentTab());
+
     /* Main editor textarea */
 
     textarea = document.createElement("textarea");

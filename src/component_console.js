@@ -191,14 +191,18 @@ function component_console_create() {
     });
     aiTrack.appendChild(aiKnob);
 
-    aiLabel.title = "Send input to AI — responds with JS commands to execute";
-    aiLabel.onclick = function (e) {
-        e.preventDefault();
+    aiLabel.title = "Send input to AI — responds with JS commands to execute (Alt+A)";
+    const _console_toggle_ai_mode = () => {
         consoleAiMode = !consoleAiMode;
         aiTrack.style.background = consoleAiMode ? "#4fc3f7" : "rgba(255,255,255,0.18)";
         aiKnob.style.left = consoleAiMode ? "16px" : "2px";
         localStorage.setItem("tm_console_ai_mode", consoleAiMode ? "true" : "false");
     };
+    aiLabel.onclick = function (e) {
+        e.preventDefault();
+        _console_toggle_ai_mode();
+    };
+    service_hotkeys_register(consoleServiceWindow, "alt+a", _console_toggle_ai_mode);
 
     const aiText = document.createElement("span");
     aiText.textContent = "AI mode";

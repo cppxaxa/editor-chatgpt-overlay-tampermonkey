@@ -118,29 +118,7 @@ ${numberedContext}
 }
 
 function component_linecommand_handle_init() {
-    registerLineReaderHotkey();
-}
-
-function registerLineReaderHotkey() {
-
-    document.addEventListener("keydown", (e) => {
-
-        if (e.altKey && e.key.toLowerCase() === "i") {
-            e.preventDefault();
-            handleLineAction();
-        }
-
-        if (e.altKey && e.key.toLowerCase() === "c") {
-            e.preventDefault();
-            handleCodeCheck();
-        }
-
-        if (e.altKey && e.key === "1") { e.preventDefault(); switchTab("editor"); }
-        if (e.altKey && e.key === "2") { e.preventDefault(); switchTab("ascii"); }
-        if (e.altKey && e.key === "3") { e.preventDefault(); switchTab("question"); }
-        if (e.altKey && e.key === "4") { e.preventDefault(); switchTab("snippets"); }
-        if (e.altKey && e.key === "5") { e.preventDefault(); switchTab("spreview"); }
-
-        if (e.altKey && e.key.toLowerCase() === "r") { e.preventDefault(); regenerateCurrentTab(); }
-    });
+    /* Hotkey wiring lives in component_window.js (service_hotkeys_register
+       calls inside createEditor) so each combo is bound to the editor's
+       ServiceWindow and only fires while that window is active. */
 }

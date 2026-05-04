@@ -72,6 +72,8 @@ function framework_on_window_resized() {
 function framework_on_init() {
     framework_scrollbars_inject();
 
+    service_hotkeys_handle_init();
+
     component_waitingui_handle_init();
     component_linecommand_handle_init();
     component_window_handle_init();
@@ -556,6 +558,12 @@ function component_clock_create() {
 
     clockServiceWindow.appendControls();
     clockContainer = clockServiceWindow.container;
+
+    /* Window-scoped hotkeys — only fire when this window is active. */
+    service_hotkeys_register(clockServiceWindow, "alt+1", () => _clock_switch_tab("clock"));
+    service_hotkeys_register(clockServiceWindow, "alt+2", () => _clock_switch_tab("alarm"));
+    service_hotkeys_register(clockServiceWindow, "alt+3", () => _clock_switch_tab("stopwatch"));
+    service_hotkeys_register(clockServiceWindow, "alt+4", () => _clock_switch_tab("timer"));
 
     // Build tab panels
     _clock_build_clock_panel();
@@ -1843,14 +1851,18 @@ function component_console_create() {
     });
     aiTrack.appendChild(aiKnob);
 
-    aiLabel.title = "Send input to AI — responds with JS commands to execute";
-    aiLabel.onclick = function (e) {
-        e.preventDefault();
+    aiLabel.title = "Send input to AI — responds with JS commands to execute (Alt+A)";
+    const _console_toggle_ai_mode = () => {
         consoleAiMode = !consoleAiMode;
         aiTrack.style.background = consoleAiMode ? "#4fc3f7" : "rgba(255,255,255,0.18)";
         aiKnob.style.left = consoleAiMode ? "16px" : "2px";
         localStorage.setItem("tm_console_ai_mode", consoleAiMode ? "true" : "false");
     };
+    aiLabel.onclick = function (e) {
+        e.preventDefault();
+        _console_toggle_ai_mode();
+    };
+    service_hotkeys_register(consoleServiceWindow, "alt+a", _console_toggle_ai_mode);
 
     const aiText = document.createElement("span");
     aiText.textContent = "AI mode";
@@ -2469,7 +2481,8 @@ function attachEditorKeydown(ta) {
     ta.addEventListener("keydown", (e) => {
 
         const isEditorTA = (ta === textarea || ta === leftTA || ta === rightTA);
-        if (isEditorTA && e.ctrlKey && !e.shiftKey && !e.altKey) {
+        if (isEditorTA && e.ctrlKey && !e.shiftKey && !e.altKey
+            && service_hotkeys_is_active(editorServiceWindow)) {
             if (e.key.toLowerCase() === "z") {
                 e.preventDefault();
                 editorUndoRedoStack.doUndo(textarea);
@@ -2736,31 +2749,9 @@ ${numberedContext}
 }
 
 function component_linecommand_handle_init() {
-    registerLineReaderHotkey();
-}
-
-function registerLineReaderHotkey() {
-
-    document.addEventListener("keydown", (e) => {
-
-        if (e.altKey && e.key.toLowerCase() === "i") {
-            e.preventDefault();
-            handleLineAction();
-        }
-
-        if (e.altKey && e.key.toLowerCase() === "c") {
-            e.preventDefault();
-            handleCodeCheck();
-        }
-
-        if (e.altKey && e.key === "1") { e.preventDefault(); switchTab("editor"); }
-        if (e.altKey && e.key === "2") { e.preventDefault(); switchTab("ascii"); }
-        if (e.altKey && e.key === "3") { e.preventDefault(); switchTab("question"); }
-        if (e.altKey && e.key === "4") { e.preventDefault(); switchTab("snippets"); }
-        if (e.altKey && e.key === "5") { e.preventDefault(); switchTab("spreview"); }
-
-        if (e.altKey && e.key.toLowerCase() === "r") { e.preventDefault(); regenerateCurrentTab(); }
-    });
+    /* Hotkey wiring lives in component_window.js (service_hotkeys_register
+       calls inside createEditor) so each combo is bound to the editor's
+       ServiceWindow and only fires while that window is active. */
 }
 
 // ===== src/component_localstorage.js =====
@@ -3834,6 +3825,18 @@ function createEditor() {
     /* Append window control cluster (min/max/close) after the editor's own
        header content so it lands at the right edge of the header. */
     editorServiceWindow.appendControls();
+
+    /* Window-scoped hotkeys — dispatched by service_hotkeys.js only when this
+       window is the active one. Ctrl+Z/Y stay on the textarea (see
+       attachEditorKeydown) but are gated on this window being active. */
+    service_hotkeys_register(editorServiceWindow, "alt+1", () => switchTab("editor"));
+    service_hotkeys_register(editorServiceWindow, "alt+2", () => switchTab("ascii"));
+    service_hotkeys_register(editorServiceWindow, "alt+3", () => switchTab("question"));
+    service_hotkeys_register(editorServiceWindow, "alt+4", () => switchTab("snippets"));
+    service_hotkeys_register(editorServiceWindow, "alt+5", () => switchTab("spreview"));
+    service_hotkeys_register(editorServiceWindow, "alt+i", () => handleLineAction());
+    service_hotkeys_register(editorServiceWindow, "alt+c", () => handleCodeCheck());
+    service_hotkeys_register(editorServiceWindow, "alt+r", () => regenerateCurrentTab());
 
     /* Main editor textarea */
 
@@ -6445,6 +6448,86 @@ window.__tm_seed_fs = function (entries) {
 if (Array.isArray(window.__tm_pending_fs)) {
     window.__tm_seed_fs(window.__tm_pending_fs);
     window.__tm_pending_fs = null;
+}
+
+// ===== src/service_hotkeys.js =====
+// -----------------------------------------------------------------------------
+// service_hotkeys.js — single document-level keydown dispatcher that routes
+// window-scoped hotkeys to the currently-active ServiceWindow.
+//
+// Components register their hotkeys against their ServiceWindow instance:
+//
+//     service_hotkeys_register(editorServiceWindow, "alt+1", () => switchTab("editor"));
+//
+// On each keydown, the dispatcher reads ServiceWindow.activeWindow() and looks
+// up the combo in that window's map. If found, preventDefault + invoke. If no
+// window is active, or the active window has no binding for the combo, the
+// event is left alone.
+//
+// Combo strings are normalized to "ctrl+alt+shift+<key>" (lowercase, modifiers
+// in fixed order). Use single-character keys ("a", "1") or named keys lowercase
+// ("enter", "tab", "escape", "arrowup"). Browser-reserved combos (Ctrl+T,
+// Ctrl+W, Ctrl+1..9, Ctrl+0, etc.) cannot be intercepted from a page — the
+// dispatcher will simply never fire for them.
+//
+// There is intentionally no "global" registration path: hotkeys without an
+// active window do nothing. Add such a path only if a real use case shows up.
+// There is also no unregister API; windows are created once and live for the
+// page lifetime today.
+// -----------------------------------------------------------------------------
+
+/* WeakMap so registry entries are GC-able if a ServiceWindow is ever dropped.
+   Map<ServiceWindow, Map<comboString, callback>> */
+const _hotkeyRegistry = new WeakMap();
+
+function _hotkeys_normalize_combo(combo) {
+    const parts = String(combo).toLowerCase().split("+").map(s => s.trim());
+    const mods = { ctrl: false, alt: false, shift: false };
+    let key = "";
+    for (const p of parts) {
+        if (p === "ctrl" || p === "control") mods.ctrl = true;
+        else if (p === "alt") mods.alt = true;
+        else if (p === "shift") mods.shift = true;
+        else key = p;
+    }
+    return (mods.ctrl ? "ctrl+" : "") + (mods.alt ? "alt+" : "") + (mods.shift ? "shift+" : "") + key;
+}
+
+function _hotkeys_combo_from_event(e) {
+    const key = e.key.toLowerCase();
+    return (e.ctrlKey ? "ctrl+" : "") + (e.altKey ? "alt+" : "") + (e.shiftKey ? "shift+" : "") + key;
+}
+
+function service_hotkeys_register(serviceWindow, combo, callback) {
+    if (!serviceWindow) {
+        console.warn("service_hotkeys_register: missing serviceWindow for combo", combo);
+        return;
+    }
+    let map = _hotkeyRegistry.get(serviceWindow);
+    if (!map) {
+        map = new Map();
+        _hotkeyRegistry.set(serviceWindow, map);
+    }
+    map.set(_hotkeys_normalize_combo(combo), callback);
+}
+
+/* Used by component_editor.js to gate Ctrl+Z/Y on the textarea handler:
+   undo/redo should only fire when the editor window is the active one. */
+function service_hotkeys_is_active(serviceWindow) {
+    return ServiceWindow.activeWindow() === serviceWindow;
+}
+
+function service_hotkeys_handle_init() {
+    document.addEventListener("keydown", (e) => {
+        const active = ServiceWindow.activeWindow();
+        if (!active) return;
+        const map = _hotkeyRegistry.get(active);
+        if (!map) return;
+        const cb = map.get(_hotkeys_combo_from_event(e));
+        if (!cb) return;
+        e.preventDefault();
+        cb(e);
+    });
 }
 
 // ===== src/service_llm.js =====

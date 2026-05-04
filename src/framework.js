@@ -45,6 +45,8 @@ function framework_on_window_resized() {
 function framework_on_init() {
     framework_scrollbars_inject();
 
+    service_hotkeys_handle_init();
+
     component_waitingui_handle_init();
     component_linecommand_handle_init();
     component_window_handle_init();

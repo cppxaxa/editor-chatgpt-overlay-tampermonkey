@@ -26,7 +26,8 @@ function attachEditorKeydown(ta) {
     ta.addEventListener("keydown", (e) => {
 
         const isEditorTA = (ta === textarea || ta === leftTA || ta === rightTA);
-        if (isEditorTA && e.ctrlKey && !e.shiftKey && !e.altKey) {
+        if (isEditorTA && e.ctrlKey && !e.shiftKey && !e.altKey
+            && service_hotkeys_is_active(editorServiceWindow)) {
             if (e.key.toLowerCase() === "z") {
                 e.preventDefault();
                 editorUndoRedoStack.doUndo(textarea);
