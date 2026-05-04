@@ -49,6 +49,7 @@ function createEditor() {
         appName:  "editor",
         width:  500,
         height: 350,
+        shell:  shell,
         isDraggable: () => editorServiceWindow.mode !== "maximized",
         isResizable: () => editorServiceWindow.mode === "normal"
     });

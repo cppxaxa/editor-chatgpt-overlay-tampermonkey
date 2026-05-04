@@ -10,6 +10,8 @@
 // @grant        none
 // ==/UserScript==
 
+var shell = {};
+
 (function () {
     'use strict';
 
@@ -39,8 +41,11 @@ function framework_register_launcher() {
         icon:    "📝",
         title:   "Code Editor"
     });
-    /* Calc lives in the system tray (registered in component_calc_handle_init).
-       Skip the Start-menu launcher to avoid double representation. */
+    framework_launcher_register("Calculator", component_calc_launch, {
+        appName: "calc",
+        icon:    "🧮",
+        title:   "Calculator"
+    });
     framework_launcher_register("Local Storage", component_localstorage_launch, {
         appName: "localstorage",
         icon:    "🗂️",
@@ -73,6 +78,7 @@ function framework_on_init() {
     component_calc_handle_init();
     component_console_handle_init();
     component_chat_handle_init();
+    component_clock_handle_init();
     component_localstorage_handle_init();
     service_toast_handle_init();
 }
@@ -83,6 +89,12 @@ function framework_init() {
     window.addEventListener("resize", framework_on_window_resized);
 
     framework_on_init();
+
+    /* Expose window.shell as a live Proxy view of the registries. Done after
+       framework_on_init so all built-in apps are registered, but the Proxy
+       itself doesn't snapshot — late dynamic-install registrations are
+       picked up automatically. */
+    framework_shell_init();
 
     /* Sweep stale per-app localStorage entries now that every component
        has registered. Runs once per page load. */
@@ -97,35 +109,12 @@ function framework_init() {
 // component_calc.js — minimal demo app showing how to build a window with
 // ServiceWindow. Two number inputs, a Sum button, and a result label.
 //
-// Registered with the framework launcher as "C". Lazily creates the window on
-// first launch.
+// Registered as a normal Start-menu app (not a tray app). Lazily creates
+// the window on first launch.
 // -----------------------------------------------------------------------------
 
 let calcServiceWindow = null;
 let calcContainer     = null;
-
-/* Inline SVG calculator: 14x14 viewBox, currentColor strokes so it inherits
-   whatever container's text colour (tray button, taskbar running-app
-   button, hover state). Body rectangle, a screen, and a 3x3 button grid
-   drawn as small dots. Used both as the tray icon and as the running-apps
-   icon in the taskbar. */
-const CALC_ICON_SVG =
-    "<svg width='14' height='14' viewBox='0 0 14 14' " +
-    "xmlns='http://www.w3.org/2000/svg' style='display:block'>" +
-        "<rect x='2' y='1' width='10' height='12' rx='1.5' " +
-        "fill='none' stroke='currentColor' stroke-width='1'/>" +
-        "<rect x='3.2' y='2.4' width='7.6' height='2.2' rx='0.4' " +
-        "fill='currentColor' opacity='0.75'/>" +
-        "<circle cx='4'   cy='6.6'  r='0.6' fill='currentColor'/>" +
-        "<circle cx='7'   cy='6.6'  r='0.6' fill='currentColor'/>" +
-        "<circle cx='10'  cy='6.6'  r='0.6' fill='currentColor'/>" +
-        "<circle cx='4'   cy='8.8'  r='0.6' fill='currentColor'/>" +
-        "<circle cx='7'   cy='8.8'  r='0.6' fill='currentColor'/>" +
-        "<circle cx='10'  cy='8.8'  r='0.6' fill='currentColor'/>" +
-        "<circle cx='4'   cy='11'   r='0.6' fill='currentColor'/>" +
-        "<circle cx='7'   cy='11'   r='0.6' fill='currentColor'/>" +
-        "<circle cx='10'  cy='11'   r='0.6' fill='currentColor'/>" +
-    "</svg>";
 
 function component_calc_launch() {
     if (!calcContainer) component_calc_create();
@@ -134,28 +123,15 @@ function component_calc_launch() {
 
 function component_calc_create() {
 
-    /* Look up the current tray button (may be null if the user has hidden
-       the icon via the overflow popup). Pass it through opts.trayButton so
-       create() installs the tray-mode patches: hidden min/max, outside-click
-       hide, downward tail, defaultClose tail-hide. The registry's onAdopt
-       will keep this in sync if the button is later replaced. */
-    const trayBtn = service_taskbar_get_tray_button("calc");
-
     calcServiceWindow = new ServiceWindow();
     calcServiceWindow.create({
         appName: "calc",
         width:  320,
         height: 200,
+        shell:  shell,
         isDraggable: () => true,
-        isResizable: () => true,
-        trayButton: trayBtn   // null is fine — tray patches install on next adopt
+        isResizable: () => true
     });
-
-    /* If no tray button existed at create() time, install the tray-mode
-       behaviour anyway by calling _adoptTrayButton(null) — but we can't
-       pass null because the patches need a button to anchor against.
-       Instead, the registry's onAdopt handles future button creations.
-       For the "hidden at boot" case the user can re-show via overflow. */
 
     calcServiceWindow.registerTab({ id: "calc", label: "Calc" });
 
@@ -169,15 +145,15 @@ function component_calc_create() {
     /* Body */
     const body = calcServiceWindow.createBody();
 
-    const inputA = calcServiceWindow.createTextbox("a");
+    const inputA = calcServiceWindow.createTextbox("a", "operand1");
     inputA.type = "number";
 
-    const inputB = calcServiceWindow.createTextbox("b");
+    const inputB = calcServiceWindow.createTextbox("b", "operand2");
     inputB.type = "number";
 
-    const resultLabel = calcServiceWindow.createLabel("Result: —");
+    const resultLabel = calcServiceWindow.createLabel("Result: —", "result");
 
-    const sumBtn = calcServiceWindow.createPrimaryButton("Sum");
+    const sumBtn = calcServiceWindow.createPrimaryButton("Sum", "sum");
 
     sumBtn.onclick = () => {
         const a = parseFloat(inputA.value) || 0;
@@ -190,6 +166,9 @@ function component_calc_create() {
     body.appendChild(sumBtn);
     body.appendChild(resultLabel);
 
+    /* Shell API needs a rescan — body elements were added after appendControls. */
+    calcServiceWindow.refreshShellAPI();
+
     /* Restore previously saved geometry/mode; otherwise center. */
     if (!calcServiceWindow.restoreState()) {
         service_window_center(calcContainer, 320, 200);
@@ -198,33 +177,9 @@ function component_calc_create() {
 
 /* Framework lifecycle reactor — registers calc with the system-restore
    registry so framework_system_restore.js can re-open this window at boot
-   if it was visible in the last session. Also registers the tray icon
-   immediately so it's visible in the system tray before the window has
-   been lazily created. Clicking the tray icon lazy-creates the window
-   (which will adopt this same button via opts.trayButton). */
+   if it was visible in the last session. */
 function component_calc_handle_init() {
     ServiceWindow.registerApp("calc", component_calc_launch);
-
-    service_taskbar_register_tray_app({
-        appName: "calc",
-        label:   "Calc",
-        icon:    CALC_ICON_SVG,
-        title:   "Calculator",
-        onClick: (btn) => {
-            if (!calcContainer) component_calc_create();
-            calcServiceWindow._toggleFromTray(btn);
-        },
-        /* Called on initial registration AND every time the user
-           re-shows the icon via the overflow popup (the DOM node
-           changes each time). Tell the live ServiceWindow about the
-           new button so its outside-click handler and tray-click
-           wiring stay in sync. */
-        onAdopt: (btn) => {
-            if (calcServiceWindow) {
-                calcServiceWindow._adoptTrayButton(btn, null);
-            }
-        }
-    });
 }
 
 // ===== src/component_chat.js =====
@@ -267,13 +222,14 @@ function component_chat_launch() {
 
 function component_chat_create() {
 
-    const trayBtn = service_taskbar_get_tray_button("chat");
+    const trayBtn = framework_taskbar_get_tray_button("chat");
 
     chatServiceWindow = new ServiceWindow();
     chatServiceWindow.create({
         appName:     "chat",
         width:       480,
         height:      400,
+        shell:  shell,
         isDraggable: () => true,
         isResizable: () => true,
         trayButton:  trayBtn
@@ -491,7 +447,7 @@ function _chat_append_waiting() {
 function component_chat_handle_init() {
     ServiceWindow.registerApp("chat", component_chat_launch);
 
-    service_taskbar_register_tray_app({
+    framework_taskbar_register_tray_app({
         appName: "chat",
         label:   "Chat",
         icon:    CHAT_ICON_SVG,
@@ -503,6 +459,888 @@ function component_chat_handle_init() {
         onAdopt: (btn) => {
             if (chatServiceWindow) {
                 chatServiceWindow._adoptTrayButton(btn, null);
+            }
+        }
+    });
+}
+
+// ===== src/component_clock.js =====
+// -----------------------------------------------------------------------------
+// component_clock.js — Clock app with 4 tabs: Clock, Alarm, Stopwatch, Timer.
+//
+// Registered as a system-tray app. Alarms and timers persist in localStorage;
+// stopwatch is session-only. Fires toasts + audio on alarm/timer events.
+// Shell API exposes dynamic sub-objects (shell.clock.alarm1, .timer1, etc.).
+// -----------------------------------------------------------------------------
+
+let clockServiceWindow = null;
+let clockContainer     = null;
+let clockActiveTab     = "clock";
+let clockIntervalId    = null;       // single 1s setInterval drives clock/alarm/timer
+
+// Alarm state — persisted in localStorage["tm_clock_alarms"]
+let clockAlarms       = [];   // [{ id, time:"HH:MM", message:"", enabled:true, firedAt:null }]
+let clockAlarmNextId  = 1;
+
+// Stopwatch state — session only
+let clockSwRunning   = false;
+let clockSwStartTime = 0;
+let clockSwElapsed   = 0;     // ms accumulated before last pause
+let clockSwLaps      = [];
+let clockSwRafId     = null;  // rAF loop for centisecond display
+
+// Timer state — persisted in localStorage["tm_clock_timers"]
+let clockTimers       = [];   // [{ id, hours, minutes, seconds, message, remainingMs, running, fired }]
+let clockTimerNextId  = 1;
+
+// Audio cache
+let _clockAudioCache = null;
+
+// DOM refs for tab panels
+let _clock_panelClock = null;
+let _clock_panelAlarm = null;
+let _clock_panelSw    = null;
+let _clock_panelTimer = null;
+
+// Clock display refs
+let _clock_timeEl = null;
+let _clock_dateEl = null;
+
+// Stopwatch display refs
+let _clock_swDisplay  = null;
+let _clock_swStartBtn = null;
+let _clock_swLapBtn   = null;
+let _clock_swResetBtn = null;
+let _clock_swLapList  = null;
+
+// Alarm/Timer list containers
+let _clock_alarmList = null;
+let _clock_timerList = null;
+
+/* Inline SVG clock icon: 14x14 viewBox. */
+const CLOCK_ICON_SVG =
+    "<svg width='14' height='14' viewBox='0 0 14 14' " +
+    "xmlns='http://www.w3.org/2000/svg' style='display:block'>" +
+        "<circle cx='7' cy='7' r='5.5' fill='none' stroke='currentColor' stroke-width='1'/>" +
+        "<line x1='7' y1='7' x2='7' y2='3.5' stroke='currentColor' stroke-width='1' stroke-linecap='round'/>" +
+        "<line x1='7' y1='7' x2='9.5' y2='8' stroke='currentColor' stroke-width='0.8' stroke-linecap='round'/>" +
+        "<circle cx='7' cy='7' r='0.5' fill='currentColor'/>" +
+    "</svg>";
+
+// ─── Launch / Create ─────────────────────────────────────────────────────────
+
+function component_clock_launch() {
+    if (!clockContainer) component_clock_create();
+    clockServiceWindow.show();
+}
+
+function component_clock_create() {
+
+    const trayBtn = framework_taskbar_get_tray_button("clock_app");
+
+    clockServiceWindow = new ServiceWindow();
+    clockServiceWindow.create({
+        appName:     "clock_app",
+        width:       560,
+        height:      380,
+        isDraggable: () => true,
+        isResizable: () => true,
+        trayButton:  trayBtn
+    });
+
+    // Register tabs
+    clockServiceWindow.registerTab({ id: "clock",     label: "Clock",     onClick: _clock_switch_tab });
+    clockServiceWindow.registerTab({ id: "alarm",     label: "Alarm",     onClick: _clock_switch_tab });
+    clockServiceWindow.registerTab({ id: "stopwatch", label: "Stopwatch", onClick: _clock_switch_tab });
+    clockServiceWindow.registerTab({ id: "timer",     label: "Timer",     onClick: _clock_switch_tab });
+
+    clockServiceWindow.appendControls();
+    clockContainer = clockServiceWindow.container;
+
+    // Build tab panels
+    _clock_build_clock_panel();
+    _clock_build_alarm_panel();
+    _clock_build_stopwatch_panel();
+    _clock_build_timer_panel();
+
+    // Load persisted alarms and timers
+    _clock_load_alarms();
+    _clock_load_timers();
+
+    // Start the 1s interval
+    clockIntervalId = setInterval(_clock_tick, 1000);
+    _clock_tick(); // immediate first tick
+
+    // Show initial tab
+    _clock_switch_tab("clock");
+
+    // Build shell API
+    _clock_rebuild_shell();
+
+    // Restore geometry or center
+    if (!clockServiceWindow.restoreState()) {
+        service_window_center(clockContainer, 560, 380);
+    }
+}
+
+// ─── Tab Switching ───────────────────────────────────────────────────────────
+
+function _clock_switch_tab(id) {
+    clockActiveTab = id;
+    clockServiceWindow.setActiveTabHighlight(id);
+
+    _clock_panelClock.style.display     = id === "clock"     ? "flex" : "none";
+    _clock_panelAlarm.style.display     = id === "alarm"     ? "flex" : "none";
+    _clock_panelSw.style.display        = id === "stopwatch" ? "flex" : "none";
+    _clock_panelTimer.style.display     = id === "timer"     ? "flex" : "none";
+}
+
+// ─── Clock Panel ─────────────────────────────────────────────────────────────
+
+function _clock_build_clock_panel() {
+    _clock_panelClock = document.createElement("div");
+    Object.assign(_clock_panelClock.style, {
+        flex: "1", display: "flex", flexDirection: "column",
+        alignItems: "center", justifyContent: "center",
+        color: "white", padding: "12px", gap: "8px"
+    });
+
+    _clock_timeEl = document.createElement("div");
+    Object.assign(_clock_timeEl.style, {
+        fontSize: "48px", fontWeight: "bold", fontFamily: "monospace",
+        letterSpacing: "2px"
+    });
+
+    _clock_dateEl = document.createElement("div");
+    Object.assign(_clock_dateEl.style, {
+        fontSize: "14px", color: "#aaa"
+    });
+
+    _clock_panelClock.appendChild(_clock_timeEl);
+    _clock_panelClock.appendChild(_clock_dateEl);
+    clockContainer.appendChild(_clock_panelClock);
+}
+
+// ─── Alarm Panel ─────────────────────────────────────────────────────────────
+
+function _clock_build_alarm_panel() {
+    _clock_panelAlarm = document.createElement("div");
+    Object.assign(_clock_panelAlarm.style, {
+        flex: "1", display: "none", flexDirection: "column",
+        color: "white", padding: "12px", gap: "8px", overflow: "hidden"
+    });
+
+    const addBtn = document.createElement("button");
+    addBtn.textContent = "+ Add Alarm";
+    Object.assign(addBtn.style, {
+        background: "#4fc3f7", color: "#000", border: "none",
+        borderRadius: "4px", padding: "6px 10px", cursor: "pointer",
+        fontWeight: "bold", alignSelf: "flex-start"
+    });
+    addBtn.onclick = function () {
+        _clock_add_alarm();
+    };
+
+    _clock_alarmList = document.createElement("div");
+    Object.assign(_clock_alarmList.style, {
+        flex: "1", overflowY: "auto", display: "flex",
+        flexDirection: "column", gap: "6px"
+    });
+
+    _clock_panelAlarm.appendChild(addBtn);
+    _clock_panelAlarm.appendChild(_clock_alarmList);
+    clockContainer.appendChild(_clock_panelAlarm);
+}
+
+function _clock_add_alarm(time, message, enabled) {
+    const alarm = {
+        id:      clockAlarmNextId++,
+        time:    time || "",
+        message: message || "",
+        enabled: enabled !== undefined ? enabled : true,
+        firedAt: null
+    };
+    clockAlarms.push(alarm);
+    _clock_render_alarm(alarm);
+    _clock_save_alarms();
+    _clock_rebuild_shell();
+}
+
+function _clock_render_alarm(alarm) {
+    const row = document.createElement("div");
+    row.dataset.alarmId = alarm.id;
+    Object.assign(row.style, {
+        display: "flex", alignItems: "center", gap: "6px",
+        background: "#2a2a2a", borderRadius: "4px", padding: "6px 8px"
+    });
+
+    const timeInput = document.createElement("input");
+    timeInput.type = "time";
+    timeInput.value = alarm.time;
+    Object.assign(timeInput.style, {
+        background: "#1e1e1e", color: "white", border: "1px solid #444",
+        borderRadius: "4px", padding: "2px 4px", fontSize: "13px", width: "90px"
+    });
+    timeInput.onchange = function () {
+        alarm.time = timeInput.value;
+        alarm.firedAt = null;
+        _clock_save_alarms();
+    };
+
+    const msgInput = document.createElement("input");
+    msgInput.type = "text";
+    msgInput.placeholder = "Message";
+    msgInput.value = alarm.message;
+    Object.assign(msgInput.style, {
+        background: "#1e1e1e", color: "white", border: "1px solid #444",
+        borderRadius: "4px", padding: "2px 4px", fontSize: "13px",
+        flex: "1", minWidth: "0"
+    });
+    msgInput.onchange = function () {
+        alarm.message = msgInput.value;
+        _clock_save_alarms();
+    };
+
+    const enableCb = document.createElement("input");
+    enableCb.type = "checkbox";
+    enableCb.checked = alarm.enabled;
+    enableCb.title = "Enabled";
+    enableCb.onchange = function () {
+        alarm.enabled = enableCb.checked;
+        alarm.firedAt = null;
+        _clock_save_alarms();
+    };
+
+    const delBtn = document.createElement("button");
+    delBtn.textContent = "×";
+    Object.assign(delBtn.style, {
+        background: "#555", color: "white", border: "none",
+        borderRadius: "4px", width: "22px", height: "22px",
+        cursor: "pointer", fontSize: "14px", lineHeight: "1"
+    });
+    delBtn.onclick = function () {
+        clockAlarms = clockAlarms.filter(function (a) { return a.id !== alarm.id; });
+        row.remove();
+        _clock_save_alarms();
+        _clock_rebuild_shell();
+    };
+
+    row.appendChild(timeInput);
+    row.appendChild(msgInput);
+    row.appendChild(enableCb);
+    row.appendChild(delBtn);
+
+    // Store DOM refs on alarm for shell API access
+    alarm._timeInput = timeInput;
+    alarm._msgInput  = msgInput;
+    alarm._enableCb  = enableCb;
+
+    _clock_alarmList.appendChild(row);
+}
+
+function _clock_save_alarms() {
+    const data = clockAlarms.map(function (a) {
+        return { id: a.id, time: a.time, message: a.message, enabled: a.enabled, firedAt: a.firedAt };
+    });
+    localStorage.setItem("tm_clock_alarms", JSON.stringify(data));
+}
+
+function _clock_load_alarms() {
+    try {
+        const raw = localStorage.getItem("tm_clock_alarms");
+        if (!raw) return;
+        const data = JSON.parse(raw);
+        data.forEach(function (a) {
+            if (a.id >= clockAlarmNextId) clockAlarmNextId = a.id + 1;
+            _clock_add_alarm(a.time, a.message, a.enabled);
+            // Restore firedAt so we don't re-fire on page load
+            const last = clockAlarms[clockAlarms.length - 1];
+            if (last) last.firedAt = a.firedAt || null;
+        });
+    } catch (e) {
+        // ignore corrupt data
+    }
+}
+
+// ─── Stopwatch Panel ─────────────────────────────────────────────────────────
+
+function _clock_build_stopwatch_panel() {
+    _clock_panelSw = document.createElement("div");
+    Object.assign(_clock_panelSw.style, {
+        flex: "1", display: "none", flexDirection: "column",
+        color: "white", padding: "12px", gap: "8px", overflow: "hidden"
+    });
+
+    _clock_swDisplay = document.createElement("div");
+    Object.assign(_clock_swDisplay.style, {
+        fontSize: "40px", fontWeight: "bold", fontFamily: "monospace",
+        textAlign: "center", letterSpacing: "2px", padding: "8px 0"
+    });
+    _clock_swDisplay.textContent = "00:00.00";
+
+    const btnRow = document.createElement("div");
+    Object.assign(btnRow.style, {
+        display: "flex", gap: "8px", justifyContent: "center"
+    });
+
+    _clock_swStartBtn = document.createElement("button");
+    _clock_swStartBtn.textContent = "Start";
+    Object.assign(_clock_swStartBtn.style, {
+        background: "#4fc3f7", color: "#000", border: "none",
+        borderRadius: "4px", padding: "6px 14px", cursor: "pointer",
+        fontWeight: "bold"
+    });
+    _clock_swStartBtn.onclick = _clock_sw_toggle;
+
+    _clock_swLapBtn = document.createElement("button");
+    _clock_swLapBtn.textContent = "Lap";
+    Object.assign(_clock_swLapBtn.style, {
+        background: "#555", color: "white", border: "none",
+        borderRadius: "4px", padding: "6px 14px", cursor: "pointer"
+    });
+    _clock_swLapBtn.onclick = _clock_sw_lap;
+
+    _clock_swResetBtn = document.createElement("button");
+    _clock_swResetBtn.textContent = "Reset";
+    Object.assign(_clock_swResetBtn.style, {
+        background: "#555", color: "white", border: "none",
+        borderRadius: "4px", padding: "6px 14px", cursor: "pointer"
+    });
+    _clock_swResetBtn.onclick = _clock_sw_reset;
+
+    btnRow.appendChild(_clock_swStartBtn);
+    btnRow.appendChild(_clock_swLapBtn);
+    btnRow.appendChild(_clock_swResetBtn);
+
+    _clock_swLapList = document.createElement("div");
+    Object.assign(_clock_swLapList.style, {
+        flex: "1", overflowY: "auto", display: "flex",
+        flexDirection: "column", gap: "2px", fontSize: "12px",
+        fontFamily: "monospace", color: "#aaa"
+    });
+
+    _clock_panelSw.appendChild(_clock_swDisplay);
+    _clock_panelSw.appendChild(btnRow);
+    _clock_panelSw.appendChild(_clock_swLapList);
+    clockContainer.appendChild(_clock_panelSw);
+}
+
+function _clock_sw_toggle() {
+    if (clockSwRunning) {
+        // Stop
+        clockSwRunning = false;
+        clockSwElapsed += (performance.now() - clockSwStartTime);
+        if (clockSwRafId) { cancelAnimationFrame(clockSwRafId); clockSwRafId = null; }
+        _clock_swStartBtn.textContent = "Start";
+        _clock_swStartBtn.style.background = "#4fc3f7";
+    } else {
+        // Start
+        clockSwRunning = true;
+        clockSwStartTime = performance.now();
+        _clock_swStartBtn.textContent = "Stop";
+        _clock_swStartBtn.style.background = "#ef5350";
+        _clock_sw_raf_loop();
+    }
+}
+
+function _clock_sw_lap() {
+    if (!clockSwRunning) return;
+    const total = clockSwElapsed + (performance.now() - clockSwStartTime);
+    clockSwLaps.push(total);
+    const lapEl = document.createElement("div");
+    lapEl.textContent = "Lap " + clockSwLaps.length + ": " + _clock_format_sw(total);
+    _clock_swLapList.insertBefore(lapEl, _clock_swLapList.firstChild);
+}
+
+function _clock_sw_reset() {
+    clockSwRunning = false;
+    clockSwElapsed = 0;
+    clockSwStartTime = 0;
+    clockSwLaps = [];
+    if (clockSwRafId) { cancelAnimationFrame(clockSwRafId); clockSwRafId = null; }
+    _clock_swDisplay.textContent = "00:00.00";
+    _clock_swStartBtn.textContent = "Start";
+    _clock_swStartBtn.style.background = "#4fc3f7";
+    _clock_swLapList.innerHTML = "";
+}
+
+function _clock_sw_raf_loop() {
+    if (!clockSwRunning) return;
+    const total = clockSwElapsed + (performance.now() - clockSwStartTime);
+    _clock_swDisplay.textContent = _clock_format_sw(total);
+    clockSwRafId = requestAnimationFrame(_clock_sw_raf_loop);
+}
+
+function _clock_format_sw(ms) {
+    const totalSec = Math.floor(ms / 1000);
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    const cs = Math.floor((ms % 1000) / 10);
+    return String(m).padStart(2, "0") + ":" +
+           String(s).padStart(2, "0") + "." +
+           String(cs).padStart(2, "0");
+}
+
+// ─── Timer Panel ─────────────────────────────────────────────────────────────
+
+function _clock_build_timer_panel() {
+    _clock_panelTimer = document.createElement("div");
+    Object.assign(_clock_panelTimer.style, {
+        flex: "1", display: "none", flexDirection: "column",
+        color: "white", padding: "12px", gap: "8px", overflow: "hidden"
+    });
+
+    const addBtn = document.createElement("button");
+    addBtn.textContent = "+ Add Timer";
+    Object.assign(addBtn.style, {
+        background: "#4fc3f7", color: "#000", border: "none",
+        borderRadius: "4px", padding: "6px 10px", cursor: "pointer",
+        fontWeight: "bold", alignSelf: "flex-start"
+    });
+    addBtn.onclick = function () {
+        _clock_add_timer();
+    };
+
+    _clock_timerList = document.createElement("div");
+    Object.assign(_clock_timerList.style, {
+        flex: "1", overflowY: "auto", display: "flex",
+        flexDirection: "column", gap: "6px"
+    });
+
+    _clock_panelTimer.appendChild(addBtn);
+    _clock_panelTimer.appendChild(_clock_timerList);
+    clockContainer.appendChild(_clock_panelTimer);
+}
+
+function _clock_add_timer(hours, minutes, seconds, message) {
+    const timer = {
+        id:          clockTimerNextId++,
+        hours:       hours   || 0,
+        minutes:     minutes || 0,
+        seconds:     seconds || 0,
+        message:     message || "",
+        remainingMs: 0,
+        running:     false,
+        fired:       false
+    };
+    timer.remainingMs = ((timer.hours * 3600) + (timer.minutes * 60) + timer.seconds) * 1000;
+    clockTimers.push(timer);
+    _clock_render_timer(timer);
+    _clock_save_timers();
+    _clock_rebuild_shell();
+}
+
+function _clock_render_timer(timer) {
+    const row = document.createElement("div");
+    row.dataset.timerId = timer.id;
+    Object.assign(row.style, {
+        display: "flex", alignItems: "center", gap: "6px",
+        background: "#2a2a2a", borderRadius: "4px", padding: "6px 8px",
+        flexWrap: "wrap"
+    });
+
+    // Time inputs row
+    const timeRow = document.createElement("div");
+    Object.assign(timeRow.style, { display: "flex", alignItems: "center", gap: "2px" });
+
+    const hInput = _clock_make_num_input(2, "h");
+    hInput.value = timer.hours;
+    hInput.onchange = function () {
+        timer.hours = parseInt(hInput.value) || 0;
+        if (!timer.running) timer.remainingMs = ((timer.hours * 3600) + (timer.minutes * 60) + timer.seconds) * 1000;
+        _clock_save_timers();
+    };
+
+    const sep1 = document.createElement("span");
+    sep1.textContent = ":";
+    sep1.style.color = "#888";
+
+    const mInput = _clock_make_num_input(2, "m");
+    mInput.value = timer.minutes;
+    mInput.onchange = function () {
+        timer.minutes = parseInt(mInput.value) || 0;
+        if (!timer.running) timer.remainingMs = ((timer.hours * 3600) + (timer.minutes * 60) + timer.seconds) * 1000;
+        _clock_save_timers();
+    };
+
+    const sep2 = document.createElement("span");
+    sep2.textContent = ":";
+    sep2.style.color = "#888";
+
+    const sInput = _clock_make_num_input(2, "s");
+    sInput.value = timer.seconds;
+    sInput.onchange = function () {
+        timer.seconds = parseInt(sInput.value) || 0;
+        if (!timer.running) timer.remainingMs = ((timer.hours * 3600) + (timer.minutes * 60) + timer.seconds) * 1000;
+        _clock_save_timers();
+    };
+
+    timeRow.appendChild(hInput);
+    timeRow.appendChild(sep1);
+    timeRow.appendChild(mInput);
+    timeRow.appendChild(sep2);
+    timeRow.appendChild(sInput);
+
+    const msgInput = document.createElement("input");
+    msgInput.type = "text";
+    msgInput.placeholder = "Message";
+    msgInput.value = timer.message;
+    Object.assign(msgInput.style, {
+        background: "#1e1e1e", color: "white", border: "1px solid #444",
+        borderRadius: "4px", padding: "2px 4px", fontSize: "12px",
+        flex: "1", minWidth: "0"
+    });
+    msgInput.onchange = function () {
+        timer.message = msgInput.value;
+        _clock_save_timers();
+    };
+
+    const remainLabel = document.createElement("span");
+    Object.assign(remainLabel.style, {
+        fontFamily: "monospace", fontSize: "13px", color: "#4fc3f7",
+        minWidth: "60px", textAlign: "right"
+    });
+    remainLabel.textContent = _clock_format_timer_ms(timer.remainingMs);
+
+    const startBtn = document.createElement("button");
+    startBtn.textContent = "Start";
+    Object.assign(startBtn.style, {
+        background: "#4fc3f7", color: "#000", border: "none",
+        borderRadius: "4px", padding: "3px 8px", cursor: "pointer",
+        fontSize: "12px", fontWeight: "bold"
+    });
+    startBtn.onclick = function () {
+        if (timer.running) {
+            timer.running = false;
+            startBtn.textContent = "Start";
+            startBtn.style.background = "#4fc3f7";
+        } else {
+            if (timer.remainingMs <= 0) {
+                timer.remainingMs = ((timer.hours * 3600) + (timer.minutes * 60) + timer.seconds) * 1000;
+            }
+            if (timer.remainingMs <= 0) return;
+            timer.running = true;
+            timer.fired = false;
+            startBtn.textContent = "Pause";
+            startBtn.style.background = "#ef5350";
+        }
+        _clock_save_timers();
+    };
+
+    const resetBtn = document.createElement("button");
+    resetBtn.textContent = "↻";
+    Object.assign(resetBtn.style, {
+        background: "#555", color: "white", border: "none",
+        borderRadius: "4px", width: "22px", height: "22px",
+        cursor: "pointer", fontSize: "13px"
+    });
+    resetBtn.onclick = function () {
+        timer.running = false;
+        timer.fired = false;
+        timer.remainingMs = ((timer.hours * 3600) + (timer.minutes * 60) + timer.seconds) * 1000;
+        remainLabel.textContent = _clock_format_timer_ms(timer.remainingMs);
+        startBtn.textContent = "Start";
+        startBtn.style.background = "#4fc3f7";
+        _clock_save_timers();
+    };
+
+    const delBtn = document.createElement("button");
+    delBtn.textContent = "×";
+    Object.assign(delBtn.style, {
+        background: "#555", color: "white", border: "none",
+        borderRadius: "4px", width: "22px", height: "22px",
+        cursor: "pointer", fontSize: "14px", lineHeight: "1"
+    });
+    delBtn.onclick = function () {
+        clockTimers = clockTimers.filter(function (t) { return t.id !== timer.id; });
+        row.remove();
+        _clock_save_timers();
+        _clock_rebuild_shell();
+    };
+
+    row.appendChild(timeRow);
+    row.appendChild(msgInput);
+    row.appendChild(remainLabel);
+    row.appendChild(startBtn);
+    row.appendChild(resetBtn);
+    row.appendChild(delBtn);
+
+    // Store DOM refs on timer for shell/tick access
+    timer._remainLabel = remainLabel;
+    timer._startBtn    = startBtn;
+    timer._hInput      = hInput;
+    timer._mInput      = mInput;
+    timer._sInput      = sInput;
+    timer._msgInput    = msgInput;
+
+    _clock_timerList.appendChild(row);
+}
+
+function _clock_make_num_input(width, label) {
+    const inp = document.createElement("input");
+    inp.type = "number";
+    inp.min = "0";
+    inp.placeholder = label;
+    Object.assign(inp.style, {
+        background: "#1e1e1e", color: "white", border: "1px solid #444",
+        borderRadius: "4px", padding: "2px 4px", fontSize: "12px",
+        width: (width * 16) + "px", textAlign: "center"
+    });
+    return inp;
+}
+
+function _clock_format_timer_ms(ms) {
+    if (ms <= 0) return "00:00:00";
+    const totalSec = Math.ceil(ms / 1000);
+    const h = Math.floor(totalSec / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    const s = totalSec % 60;
+    return String(h).padStart(2, "0") + ":" +
+           String(m).padStart(2, "0") + ":" +
+           String(s).padStart(2, "0");
+}
+
+function _clock_save_timers() {
+    const data = clockTimers.map(function (t) {
+        return {
+            id: t.id, hours: t.hours, minutes: t.minutes, seconds: t.seconds,
+            message: t.message, remainingMs: t.remainingMs,
+            running: t.running, fired: t.fired
+        };
+    });
+    localStorage.setItem("tm_clock_timers", JSON.stringify(data));
+}
+
+function _clock_load_timers() {
+    try {
+        const raw = localStorage.getItem("tm_clock_timers");
+        if (!raw) return;
+        const data = JSON.parse(raw);
+        data.forEach(function (t) {
+            if (t.id >= clockTimerNextId) clockTimerNextId = t.id + 1;
+            _clock_add_timer(t.hours, t.minutes, t.seconds, t.message);
+            // Restore runtime state
+            const last = clockTimers[clockTimers.length - 1];
+            if (last) {
+                last.remainingMs = t.remainingMs || 0;
+                last.running = t.running || false;
+                last.fired = t.fired || false;
+                if (last._remainLabel) last._remainLabel.textContent = _clock_format_timer_ms(last.remainingMs);
+                if (last.running && last._startBtn) {
+                    last._startBtn.textContent = "Pause";
+                    last._startBtn.style.background = "#ef5350";
+                }
+            }
+        });
+    } catch (e) {
+        // ignore corrupt data
+    }
+}
+
+// ─── 1s Tick ─────────────────────────────────────────────────────────────────
+
+function _clock_tick() {
+    const now = new Date();
+
+    // Clock tab
+    if (_clock_timeEl) {
+        _clock_timeEl.textContent =
+            String(now.getHours()).padStart(2, "0") + ":" +
+            String(now.getMinutes()).padStart(2, "0") + ":" +
+            String(now.getSeconds()).padStart(2, "0");
+    }
+    if (_clock_dateEl) {
+        _clock_dateEl.textContent = now.toLocaleDateString(undefined, {
+            weekday: "long", year: "numeric", month: "long", day: "numeric"
+        });
+    }
+
+    // Alarm check
+    const hhmm = String(now.getHours()).padStart(2, "0") + ":" +
+                 String(now.getMinutes()).padStart(2, "0");
+    const minuteKey = now.getFullYear() + "-" + now.getMonth() + "-" +
+                      now.getDate() + "-" + now.getHours() + "-" + now.getMinutes();
+
+    for (let i = 0; i < clockAlarms.length; i++) {
+        const a = clockAlarms[i];
+        if (a.enabled && a.time === hhmm && a.firedAt !== minuteKey) {
+            a.firedAt = minuteKey;
+            _clock_save_alarms();
+            _clock_fire_notification("Alarm", a.message || ("Alarm " + a.id));
+        }
+    }
+
+    // Timer countdown
+    let _timerDirty = false;
+    for (let i = 0; i < clockTimers.length; i++) {
+        const t = clockTimers[i];
+        if (!t.running || t.fired) continue;
+        _timerDirty = true;
+        t.remainingMs -= 1000;
+        if (t.remainingMs <= 0) {
+            t.remainingMs = 0;
+            t.running = false;
+            t.fired = true;
+            if (t._startBtn) {
+                t._startBtn.textContent = "Start";
+                t._startBtn.style.background = "#4fc3f7";
+            }
+            _clock_fire_notification("Timer", t.message || ("Timer " + t.id));
+        }
+        if (t._remainLabel) {
+            t._remainLabel.textContent = _clock_format_timer_ms(t.remainingMs);
+        }
+    }
+    if (_timerDirty) _clock_save_timers();
+}
+
+// ─── Notifications ───────────────────────────────────────────────────────────
+
+function _clock_fire_notification(type, message) {
+    service_toast_show(message, {
+        title: type,
+        icon: type === "Alarm" ? "⏰" : "⏱️",
+        duration: 5000
+    });
+    _clock_play_alarm();
+}
+
+async function _clock_play_alarm() {
+    try {
+        if (!_clockAudioCache) {
+            if (typeof service_fs_get === "function") {
+                const file = await service_fs_get("alarm.wav");
+                if (file) _clockAudioCache = file.dataUrl;
+            }
+        }
+        if (_clockAudioCache) {
+            const audio = new Audio(_clockAudioCache);
+            audio.play();
+            setTimeout(function () { audio.pause(); audio.currentTime = 0; }, 5000);
+        }
+    } catch (e) {
+        // Silently fail if audio unavailable
+    }
+}
+
+// ─── Shell API ───────────────────────────────────────────────────────────────
+
+function _clock_rebuild_shell() {
+    if (typeof shell === "undefined") return;
+
+    var ns = {};
+
+    // Window controls
+    ns.show      = function () { component_clock_launch(); };
+    ns.hide      = function () { if (clockServiceWindow) clockServiceWindow.hide(); };
+    ns.isVisible = function () { return clockServiceWindow ? clockServiceWindow.visible : false; };
+
+    // Alarm management
+    ns.addAlarm = function () {
+        _clock_add_alarm();
+    };
+    ns.removeAlarm = function (name) {
+        var m = String(name).match(/^alarm(\d+)$/);
+        if (!m) return;
+        var idx = parseInt(m[1], 10) - 1;
+        if (idx < 0 || idx >= clockAlarms.length) return;
+        var alarm = clockAlarms[idx];
+        clockAlarms.splice(idx, 1);
+        var row = _clock_alarmList.querySelector("[data-alarm-id='" + alarm.id + "']");
+        if (row) row.remove();
+        _clock_save_alarms();
+        _clock_rebuild_shell();
+    };
+
+    // Dynamic alarm sub-objects
+    for (var ai = 0; ai < clockAlarms.length; ai++) {
+        (function (alarm, idx) {
+            ns["alarm" + (idx + 1)] = {
+                getTime:    function ()  { return alarm.time; },
+                setTime:    function (v) { alarm.time = v; if (alarm._timeInput) alarm._timeInput.value = v; alarm.firedAt = null; _clock_save_alarms(); },
+                getMessage: function ()  { return alarm.message; },
+                setMessage: function (v) { alarm.message = v; if (alarm._msgInput) alarm._msgInput.value = v; _clock_save_alarms(); },
+                isEnabled:  function ()  { return alarm.enabled; },
+                setEnabled: function (b) { alarm.enabled = !!b; if (alarm._enableCb) alarm._enableCb.checked = !!b; alarm.firedAt = null; _clock_save_alarms(); }
+            };
+        })(clockAlarms[ai], ai);
+    }
+
+    // Stopwatch
+    ns.startStopwatch = function () {
+        if (!clockSwRunning) _clock_sw_toggle();
+    };
+    ns.stopStopwatch = function () {
+        if (clockSwRunning) _clock_sw_toggle();
+    };
+    ns.resetStopwatch = function () {
+        _clock_sw_reset();
+    };
+    ns.lapStopwatch = function () {
+        _clock_sw_lap();
+    };
+    ns.getStopwatchElapsed = function () {
+        if (clockSwRunning) return clockSwElapsed + (performance.now() - clockSwStartTime);
+        return clockSwElapsed;
+    };
+
+    // Timer management
+    ns.addTimer = function () {
+        _clock_add_timer();
+    };
+    ns.removeTimer = function (name) {
+        var m = String(name).match(/^timer(\d+)$/);
+        if (!m) return;
+        var idx = parseInt(m[1], 10) - 1;
+        if (idx < 0 || idx >= clockTimers.length) return;
+        var timer = clockTimers[idx];
+        clockTimers.splice(idx, 1);
+        var row = _clock_timerList.querySelector("[data-timer-id='" + timer.id + "']");
+        if (row) row.remove();
+        _clock_save_timers();
+        _clock_rebuild_shell();
+    };
+
+    // Dynamic timer sub-objects
+    for (var ti = 0; ti < clockTimers.length; ti++) {
+        (function (timer, idx) {
+            ns["timer" + (idx + 1)] = {
+                getHours:     function ()  { return timer.hours; },
+                setHours:     function (v) { timer.hours = parseInt(v) || 0; if (timer._hInput) timer._hInput.value = timer.hours; if (!timer.running) timer.remainingMs = ((timer.hours * 3600) + (timer.minutes * 60) + timer.seconds) * 1000; },
+                getMinutes:   function ()  { return timer.minutes; },
+                setMinutes:   function (v) { timer.minutes = parseInt(v) || 0; if (timer._mInput) timer._mInput.value = timer.minutes; if (!timer.running) timer.remainingMs = ((timer.hours * 3600) + (timer.minutes * 60) + timer.seconds) * 1000; },
+                getSeconds:   function ()  { return timer.seconds; },
+                setSeconds:   function (v) { timer.seconds = parseInt(v) || 0; if (timer._sInput) timer._sInput.value = timer.seconds; if (!timer.running) timer.remainingMs = ((timer.hours * 3600) + (timer.minutes * 60) + timer.seconds) * 1000; },
+                getMessage:   function ()  { return timer.message; },
+                setMessage:   function (v) { timer.message = v; if (timer._msgInput) timer._msgInput.value = v; },
+                start:        function ()  { if (!timer.running) { if (timer.remainingMs <= 0) timer.remainingMs = ((timer.hours * 3600) + (timer.minutes * 60) + timer.seconds) * 1000; if (timer.remainingMs > 0) { timer.running = true; timer.fired = false; if (timer._startBtn) { timer._startBtn.textContent = "Pause"; timer._startBtn.style.background = "#ef5350"; } } } },
+                pause:        function ()  { if (timer.running) { timer.running = false; if (timer._startBtn) { timer._startBtn.textContent = "Start"; timer._startBtn.style.background = "#4fc3f7"; } } },
+                reset:        function ()  { timer.running = false; timer.fired = false; timer.remainingMs = ((timer.hours * 3600) + (timer.minutes * 60) + timer.seconds) * 1000; if (timer._remainLabel) timer._remainLabel.textContent = _clock_format_timer_ms(timer.remainingMs); if (timer._startBtn) { timer._startBtn.textContent = "Start"; timer._startBtn.style.background = "#4fc3f7"; } },
+                getRemaining: function ()  { return timer.remainingMs; }
+            };
+        })(clockTimers[ti], ti);
+    }
+
+    shell.clock = ns;
+}
+
+// ─── Framework Lifecycle ─────────────────────────────────────────────────────
+
+function component_clock_handle_init() {
+    ServiceWindow.registerApp("clock_app", component_clock_launch);
+
+    framework_taskbar_register_tray_app({
+        appName: "clock_app",
+        label:   "Clock",
+        icon:    CLOCK_ICON_SVG,
+        title:   "Clock",
+        onClick: function (btn) {
+            if (!clockContainer) component_clock_create();
+            clockServiceWindow._toggleFromTray(btn);
+        },
+        onAdopt: function (btn) {
+            if (clockServiceWindow) {
+                clockServiceWindow._adoptTrayButton(btn, null);
             }
         }
     });
@@ -834,6 +1672,13 @@ let consoleOutputEl      = null;
 let consoleInputEl       = null;
 let consoleHistory       = [];
 let consoleHistoryIdx    = -1;
+let consoleAiMode        = false;
+let consoleAiRunning     = false;
+
+/* DOM refs for the AI control bar */
+let _console_aiSpinner   = null;
+let _console_aiCancelBtn = null;
+let _console_aiAbort     = null;   // AbortController for the current AI job
 
 /* Terminal-ish SVG: monitor with a `>_` prompt. */
 const CONSOLE_ICON_SVG =
@@ -856,7 +1701,7 @@ function component_console_launch() {
 
 function component_console_create() {
 
-    const trayBtn = service_taskbar_get_tray_button("console");
+    const trayBtn = framework_taskbar_get_tray_button("console");
 
     consoleServiceWindow = new ServiceWindow();
     consoleServiceWindow.create({
@@ -948,7 +1793,106 @@ function component_console_create() {
     inputRow.appendChild(prompt);
     inputRow.appendChild(input);
 
+    /* ---- Control bar (between output and input) ---- */
+    const controlBar = document.createElement("div");
+    Object.assign(controlBar.style, {
+        display: "flex",
+        alignItems: "center",
+        gap: "8px",
+        borderTop: "1px solid #222",
+        background: "#0a0a0a",
+        padding: "3px 8px",
+        fontSize: "11px"
+    });
+
+    /* AI-mode toggle — slide switch matching the desktop shell toggle style */
+    const aiLabel = document.createElement("label");
+    Object.assign(aiLabel.style, {
+        display: "flex", alignItems: "center", gap: "6px",
+        color: "#999", cursor: "pointer", whiteSpace: "nowrap", userSelect: "none"
+    });
+
+    const aiInitial = localStorage.getItem("tm_console_ai_mode") === "true";
+    consoleAiMode = aiInitial;
+
+    /* Track */
+    const aiTrack = document.createElement("span");
+    Object.assign(aiTrack.style, {
+        position: "relative",
+        display: "inline-block",
+        width: "30px",
+        height: "16px",
+        borderRadius: "8px",
+        background: aiInitial ? "#4fc3f7" : "rgba(255,255,255,0.18)",
+        transition: "background 150ms ease",
+        flexShrink: "0"
+    });
+
+    /* Knob */
+    const aiKnob = document.createElement("span");
+    Object.assign(aiKnob.style, {
+        position: "absolute",
+        top: "2px",
+        left: aiInitial ? "16px" : "2px",
+        width: "12px",
+        height: "12px",
+        borderRadius: "50%",
+        background: "white",
+        transition: "left 150ms ease",
+        boxShadow: "0 1px 3px rgba(0,0,0,0.4)"
+    });
+    aiTrack.appendChild(aiKnob);
+
+    aiLabel.title = "Send input to AI — responds with JS commands to execute";
+    aiLabel.onclick = function (e) {
+        e.preventDefault();
+        consoleAiMode = !consoleAiMode;
+        aiTrack.style.background = consoleAiMode ? "#4fc3f7" : "rgba(255,255,255,0.18)";
+        aiKnob.style.left = consoleAiMode ? "16px" : "2px";
+        localStorage.setItem("tm_console_ai_mode", consoleAiMode ? "true" : "false");
+    };
+
+    const aiText = document.createElement("span");
+    aiText.textContent = "AI mode";
+    aiLabel.appendChild(aiTrack);
+    aiLabel.appendChild(aiText);
+    controlBar.appendChild(aiLabel);
+
+    /* Spinner — hidden by default */
+    const aiSpinner = document.createElement("span");
+    aiSpinner.textContent = "";
+    Object.assign(aiSpinner.style, {
+        color: "#c5a5ff",
+        display: "none",
+        fontSize: "11px"
+    });
+    _console_aiSpinner = aiSpinner;
+    controlBar.appendChild(aiSpinner);
+
+    /* Cancel button — hidden by default */
+    const aiCancelBtn = document.createElement("button");
+    aiCancelBtn.textContent = "Cancel";
+    Object.assign(aiCancelBtn.style, {
+        background: "#333",
+        color: "#ff6b6b",
+        border: "1px solid #555",
+        borderRadius: "3px",
+        padding: "1px 8px",
+        cursor: "pointer",
+        fontSize: "11px",
+        display: "none"
+    });
+    aiCancelBtn.onclick = function () {
+        if (_console_aiAbort) {
+            _console_aiAbort.abort();
+        }
+        flushLlmQueue();
+    };
+    _console_aiCancelBtn = aiCancelBtn;
+    controlBar.appendChild(aiCancelBtn);
+
     body.appendChild(out);
+    body.appendChild(controlBar);
     body.appendChild(inputRow);
 
     /* Keydown — Enter submits (Shift+Enter inserts newline), Up/Down
@@ -962,9 +1906,13 @@ function component_console_create() {
             if (cmd.trim().length === 0) return;
             consoleHistory.push(cmd);
             consoleHistoryIdx = consoleHistory.length;
-            /* Route through the queue so textbox-typed commands and
-               programmatic submitConsoleMessage() calls share one FIFO. */
-            submitConsoleMessage(cmd);
+            if (consoleAiMode) {
+                _component_console_ai_submit(cmd);
+            } else {
+                /* Route through the queue so textbox-typed commands and
+                   programmatic submitConsoleMessage() calls share one FIFO. */
+                submitConsoleMessage(cmd);
+            }
         } else if (ev.key === "ArrowUp" && !input.value.includes("\n")) {
             if (consoleHistory.length === 0) return;
             ev.preventDefault();
@@ -1181,10 +2129,300 @@ function component_console_execute(cmd) {
     return { result, error: null };
 }
 
+/* ---- Shell introspection for AI context ---- */
+
+/* Walk an object and produce a compact description of its API surface.
+   maxDepth prevents infinite recursion on circular refs. */
+function _console_describe_obj(obj, depth, maxDepth) {
+    if (depth >= maxDepth) return "...";
+    if (obj === null || obj === undefined) return String(obj);
+    var t = typeof obj;
+    if (t === "function") return "function()";
+    if (t !== "object") return t;
+
+    var keys = [];
+    try { keys = Object.keys(obj); } catch (e) { return "{...}"; }
+    if (keys.length === 0) return "{}";
+
+    var parts = [];
+    for (var i = 0; i < keys.length; i++) {
+        var k = keys[i];
+        if (k.charAt(0) === "_") continue;  // skip private
+        var v;
+        try { v = obj[k]; } catch (e) { v = "[error]"; }
+        parts.push(k + ": " + _console_describe_obj(v, depth + 1, maxDepth));
+    }
+    return "{ " + parts.join(", ") + " }";
+}
+
+function _console_get_shell_description() {
+    if (typeof shell === "undefined") return "(shell object not available)";
+    return _console_describe_obj(shell, 0, 3);
+}
+
+/* ---- Agentic AI loop ---- */
+
+const _CONSOLE_AI_MAX_TURNS = 20;
+
+/* Execute a single command, capturing console.* output as strings.
+   Returns { result, error, logs[] }. */
+function _console_ai_exec_capturing(cmd) {
+    var logs = [];
+
+    var origLog   = console.log;
+    var origInfo  = console.info;
+    var origWarn  = console.warn;
+    var origError = console.error;
+    var origDir   = console.dir;
+
+    var fmtArgs = function (args) {
+        return Array.prototype.map.call(args, component_console_format).join(" ");
+    };
+
+    console.log   = function () { var s = fmtArgs(arguments); logs.push(s); component_console_print(s, "#d0d0d0"); origLog.apply(console, arguments); };
+    console.info  = function () { var s = fmtArgs(arguments); logs.push(s); component_console_print(s, "#9ecbff"); origInfo.apply(console, arguments); };
+    console.warn  = function () { var s = fmtArgs(arguments); logs.push(s); component_console_print(s, "#f0c674"); origWarn.apply(console, arguments); };
+    console.error = function () { var s = fmtArgs(arguments); logs.push(s); component_console_print(s, "#ff6b6b"); origError.apply(console, arguments); };
+    console.dir   = function () { var s = fmtArgs(arguments); logs.push(s); component_console_print(s, "#c5e478"); origDir.apply(console, arguments); };
+
+    var result, threw = false, err;
+    try {
+        result = component_console_eval(cmd);
+    } catch (e) {
+        threw = true;
+        err = e;
+    } finally {
+        console.log   = origLog;
+        console.info  = origInfo;
+        console.warn  = origWarn;
+        console.error = origError;
+        console.dir   = origDir;
+    }
+
+    if (threw) {
+        var msg = (err && err.stack) ? err.stack : String(err);
+        component_console_print(msg, "#ff6b6b");
+        logs.push("ERROR: " + msg);
+        return { result: undefined, error: err, logs: logs };
+    }
+
+    if (result !== undefined) {
+        var formatted = component_console_format(result);
+        component_console_print(formatted, "#7ee787");
+        logs.push("=> " + formatted);
+    }
+
+    return { result: result, error: null, logs: logs };
+}
+
+/* AI mode — agentic loop. Sends user request to ChatGPT with shell context.
+   AI responds with JSON { commands, isFinal }. Commands are executed, output
+   is fed back if isFinal is false. Loops up to _CONSOLE_AI_MAX_TURNS. */
+function _component_console_ai_submit(userText) {
+    if (consoleAiRunning) {
+        component_console_print("[AI] Already waiting for a response…", "#f0c674");
+        return;
+    }
+
+    if (!consoleContainer) component_console_create();
+
+    component_console_print("[AI] " + userText, "#c5a5ff");
+    consoleAiRunning = true;
+    _console_ai_show_waiting(true);
+
+    /* Spinner animation */
+    var frames = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
+    var frameIdx = 0;
+    var spinTimer = setInterval(function () {
+        if (_console_aiSpinner) {
+            _console_aiSpinner.textContent = frames[frameIdx] + " Thinking…";
+        }
+        frameIdx = (frameIdx + 1) % frames.length;
+    }, 80);
+
+    _console_aiAbort = new AbortController();
+    var cancelled = false;
+
+    /* Listen for abort */
+    _console_aiAbort.signal.addEventListener("abort", function () {
+        cancelled = true;
+    });
+
+    var shellDesc = _console_get_shell_description();
+
+    var systemPrompt =
+        "You are a JS console agent. The user describes a task in plain English. " +
+        "You respond ONLY with a JSON object wrapped in a ```json code fence:\n" +
+        '```json\n{"commands": ["cmd1", "cmd2"], "isFinal": true}\n```\n\n' +
+        "Rules:\n" +
+        "- commands: array of JavaScript expressions to eval in the browser console.\n" +
+        "- isFinal: true if the task is done after these commands. false if you need to see the output to decide next steps.\n" +
+        "- Do NOT use semicolons at the end of statements.\n" +
+        "- Use console.log() for output the user should see.\n" +
+        "\nStrict command syntax rules:\n" +
+        "- Every entry in commands MUST be valid standalone JavaScript when eval'd.\n" +
+        "- Before responding, mentally verify that every command parses as valid JS independently.\n" +
+        "- String literals inside commands must be properly quoted and escaped for JSON encoding.\n" +
+        "- Prefer single quotes or escaped double quotes inside command strings since the commands array uses double-quote JSON strings.\n" +
+        "- Template literals (backticks) work well inside JSON strings and are preferred for interpolation.\n" +
+        '  e.g. {"commands":["console.log(`Result: ${1+2}`)"],"isFinal":true}\n' +
+        "- Do NOT produce commands that would be a syntax error in isolation (e.g. dangling brackets, unclosed strings).\n" +
+        "- Each command is eval'd separately — do NOT split a single statement across multiple commands.\n" +
+        "\nShell & discovery:\n" +
+        "- IMPORTANT: When you are unsure about an object's API, use console.dir(obj) to inspect it first (with isFinal: false) before calling methods. " +
+        "For example, console.dir(shell.clock) will show you all available methods and sub-objects. " +
+        "This is especially useful for dynamically-built namespaces where the exact method signatures may vary.\n" +
+        "- The page has a global `shell` object for app automation.\n" +
+        "- Current shell API:\n" + shellDesc + "\n\n" +
+        "- Each app namespace (e.g. shell.clock, shell.calc) is built dynamically by the app. " +
+        "Use shell.list() to see available apps. Use console.dir(shell.<appName>) to discover the full API of any app before using it.\n" +
+        "- The shell object populates dynamically. Launching an app (e.g. shell.launcher.calc(), shell.clock.show()) " +
+        "causes that app to build its namespace on shell — new keys and sub-objects appear that did not exist before the launch. " +
+        "Similarly, mutating state (e.g. addAlarm(), addTimer()) creates new sub-objects (shell.clock.alarm1, shell.clock.timer1). " +
+        "After launching an app or mutating state, always re-inspect with console.dir() to discover the newly available API.\n" +
+        "- Maximum " + _CONSOLE_AI_MAX_TURNS + " turns allowed.\n";
+
+    var conversation = [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userText }
+    ];
+
+    _console_ai_loop(conversation, 0, spinTimer, cancelled);
+}
+
+function _console_ai_loop(conversation, turn, spinTimer, cancelled) {
+
+    if (cancelled) {
+        _console_ai_finish(spinTimer, "Cancelled.");
+        return;
+    }
+
+    if (turn >= _CONSOLE_AI_MAX_TURNS) {
+        _console_ai_finish(spinTimer, "Reached max " + _CONSOLE_AI_MAX_TURNS + " turns.");
+        return;
+    }
+
+    /* Build the prompt from conversation history. For the LLM service
+       (which is ChatGPT DOM automation), we flatten the conversation
+       into a single prompt string. */
+    var prompt = "";
+    for (var i = 0; i < conversation.length; i++) {
+        var msg = conversation[i];
+        if (msg.role === "system") {
+            prompt += msg.content + "\n\n";
+        } else if (msg.role === "user") {
+            prompt += "User: " + msg.content + "\n\n";
+        } else if (msg.role === "assistant") {
+            prompt += "Assistant: " + msg.content + "\n\n";
+        } else if (msg.role === "output") {
+            prompt += "Command output:\n" + msg.content + "\n\n";
+        }
+    }
+
+    component_console_print("[AI] Turn " + (turn + 1) + "/" + _CONSOLE_AI_MAX_TURNS + "…", "#888");
+
+    submitMessage(
+        prompt,
+        function () { /* onstart */ },
+        function (ctx) {
+            if (_console_aiAbort && _console_aiAbort.signal.aborted) {
+                _console_ai_finish(spinTimer, "Cancelled.");
+                return;
+            }
+
+            if (ctx.cancelled) {
+                _console_ai_finish(spinTimer, "Cancelled.");
+                return;
+            }
+            if (ctx.error) {
+                _console_ai_finish(spinTimer, "Error: " + String(ctx.error));
+                return;
+            }
+
+            var raw = (ctx.result || "").trim();
+            if (!raw) {
+                _console_ai_finish(spinTimer, "Empty response.");
+                return;
+            }
+
+            /* Strip markdown fences if present */
+            raw = raw.replace(/^```(?:json|javascript|js)?\s*\n?/i, "")
+                     .replace(/\n?```\s*$/, "")
+                     .trim();
+
+            /* Parse JSON response */
+            var parsed;
+            try {
+                parsed = JSON.parse(raw);
+            } catch (e) {
+                /* If not valid JSON, try to execute as raw JS (fallback) */
+                component_console_print("[AI] Response (not JSON, executing as JS):", "#f0c674");
+                component_console_print(raw, "#9ecbff");
+                submitConsoleMessage(raw);
+                _console_ai_finish(spinTimer, "Done (fallback mode).");
+                return;
+            }
+
+            var commands = parsed.commands || [];
+            var isFinal  = parsed.isFinal !== false;  // default true if missing
+
+            /* Add assistant message to conversation */
+            conversation.push({ role: "assistant", content: raw });
+
+            if (commands.length === 0) {
+                _console_ai_finish(spinTimer, "Done (no commands).");
+                return;
+            }
+
+            /* Execute commands and collect output */
+            var allLogs = [];
+            for (var ci = 0; ci < commands.length; ci++) {
+                var cmd = commands[ci];
+                component_console_print("[AI cmd " + (ci + 1) + "] " + cmd, "#c5a5ff");
+                var out = _console_ai_exec_capturing(cmd);
+                if (out.logs.length > 0) {
+                    allLogs = allLogs.concat(out.logs);
+                }
+            }
+
+            if (isFinal) {
+                _console_ai_finish(spinTimer, "Done.");
+                return;
+            }
+
+            /* Feed output back to AI for next turn */
+            var outputText = allLogs.length > 0
+                ? allLogs.join("\n")
+                : "(no output)";
+            conversation.push({ role: "output", content: outputText });
+
+            /* Continue the loop asynchronously */
+            setTimeout(function () {
+                _console_ai_loop(conversation, turn + 1, spinTimer,
+                    _console_aiAbort && _console_aiAbort.signal.aborted);
+            }, 0);
+        }
+    );
+}
+
+function _console_ai_finish(spinTimer, message) {
+    clearInterval(spinTimer);
+    consoleAiRunning = false;
+    _console_aiAbort = null;
+    _console_ai_show_waiting(false);
+    component_console_print("[AI] " + message, "#f0c674");
+}
+
+/* Show/hide the spinner and cancel button in the control bar. */
+function _console_ai_show_waiting(show) {
+    if (_console_aiSpinner)   _console_aiSpinner.style.display   = show ? "inline" : "none";
+    if (_console_aiCancelBtn) _console_aiCancelBtn.style.display = show ? "inline-block" : "none";
+}
+
 function component_console_handle_init() {
     ServiceWindow.registerApp("console", component_console_launch);
 
-    service_taskbar_register_tray_app({
+    framework_taskbar_register_tray_app({
         appName: "console",
         label:   "Console",
         icon:    CONSOLE_ICON_SVG,
@@ -1552,6 +2790,7 @@ function component_localstorage_create() {
         appName:  "localstorage",
         width:  700,
         height: 500,
+        shell:  shell,
         isDraggable: () => true,
         isResizable: () => true,
         minWidth: 400,
@@ -2531,6 +3770,7 @@ function createEditor() {
         appName:  "editor",
         width:  500,
         height: 350,
+        shell:  shell,
         isDraggable: () => editorServiceWindow.mode !== "maximized",
         isResizable: () => editorServiceWindow.mode === "normal"
     });
@@ -3006,7 +4246,7 @@ function framework_launcher_register(textContent, onlaunch, opts) {
 // -----------------------------------------------------------------------------
 // framework_launcher_kdeubuntu.js — KDE/Ubuntu-style launcher registration.
 //
-// Thin wrapper around service_taskbar.js. The taskbar service owns all DOM:
+// Thin wrapper around framework_taskbar.js. The taskbar service owns all DOM:
 // wallpaper, bottom taskbar, Start button + Start menu (search + scrollable
 // app list), running-apps list, system tray, up arrow for overflow, and
 // clock. This file just exposes the registration entrypoint that
@@ -3015,8 +4255,8 @@ function framework_launcher_register(textContent, onlaunch, opts) {
 
 function framework_launcher_kdeubuntu_register(textContent, onlaunch, opts) {
 
-    service_taskbar_init();
-    service_taskbar_register_app(textContent, onlaunch, opts);
+    framework_taskbar_init();
+    framework_taskbar_register_app(textContent, onlaunch, opts);
 }
 
 // ===== src/framework_orphan_cleanup.js =====
@@ -3036,9 +4276,9 @@ function framework_launcher_kdeubuntu_register(textContent, onlaunch, opts) {
 //   - "tm_window_<appName>" geometry blobs whose appName is not in
 //     ServiceWindow._apps.
 //   - "tm_tray_hidden_apps" entries whose appName is not in the tray-app
-//     registry. Tray apps register through service_taskbar_register_tray_app,
+//     registry. Tray apps register through framework_taskbar_register_tray_app,
 //     which keeps an internal _tray_apps list — we expose
-//     service_taskbar_list_tray_apps() so this file doesn't need to reach
+//     framework_taskbar_list_tray_apps() so this file doesn't need to reach
 //     into private state.
 //
 // What we DO NOT sweep:
@@ -3082,7 +4322,7 @@ function framework_orphan_cleanup() {
     let removedTray = 0;
     try {
         const liveTrayNames = new Set(
-            service_taskbar_list_tray_apps().map(a => a.appName)
+            framework_taskbar_list_tray_apps().map(a => a.appName)
         );
         const raw = localStorage.getItem("tm_tray_hidden_apps");
         if (raw) {
@@ -3165,6 +4405,145 @@ function framework_scrollbars_inject() {
     document.head.appendChild(style);
 }
 
+// ===== src/framework_shell.js =====
+// -----------------------------------------------------------------------------
+// framework_shell.js — top-level scripting facade exposed as window.shell.
+//
+// The shell is a *live view* of the existing registries. It does not own
+// state. Install/uninstall is the registry's job:
+//     framework_taskbar_register_app / _unregister_app          (start menu)
+//     framework_taskbar_register_tray_app / _unregister_tray_app (system tray)
+//
+// Public surface:
+//   shell.launcher.<appName>()       — invokes the Start-menu app's onlaunch.
+//   shell.tray.<appName>()           — invokes the tray app's onClick (toggle).
+//   shell.tray.<appName>.show()      — force-show the tray icon.
+//   shell.tray.<appName>.hide()      — force-hide the tray icon.
+//   shell.startMenu.open() / close() / toggle()
+//   shell.shellVisibility.show() / hide() / isHidden()
+//   shell.list()                     — { launcher: [...], tray: [...] }
+//
+// Why a Proxy: the registries can grow at runtime (dynamic install via
+// localStorage / src-fs at any point after boot). A Proxy resolves names
+// on every access against the current registry — no caching, no re-binding,
+// uninstall returns to undefined for free.
+//
+// Coupling: this file depends ONLY on framework_taskbar's public API
+// (framework_taskbar_list_apps, _list_tray_apps, _invoke_app, _invoke_tray_app,
+// _set_app_visibility, _toggle_start_menu, _close_start_menu, _show_shell,
+// _hide_shell, _is_hidden). It does not poke private state.
+// -----------------------------------------------------------------------------
+
+function _framework_shell_make_launcher_proxy() {
+    return new Proxy(Object.create(null), {
+        get(_target, prop) {
+            if (typeof prop !== "string") return undefined;
+            if (prop === "list") {
+                return () => framework_taskbar_list_apps()
+                    .filter(a => a.appName)
+                    .map(a => a.appName);
+            }
+            const app = framework_taskbar_list_apps().find(a => a.appName === prop);
+            if (!app) return undefined;
+            /* Re-resolve at call time so unregister-then-call fails cleanly
+               (invoke_app throws) instead of invoking a stale closure. */
+            const fn = () => framework_taskbar_invoke_app(prop);
+            fn.appName = app.appName;
+            fn.label   = app.label;
+            fn.title   = app.title;
+            return fn;
+        },
+        has(_t, prop) {
+            return typeof prop === "string" &&
+                !!framework_taskbar_list_apps().find(a => a.appName === prop);
+        },
+        ownKeys() {
+            return framework_taskbar_list_apps()
+                .filter(a => a.appName).map(a => a.appName);
+        },
+        getOwnPropertyDescriptor(_t, prop) {
+            const app = framework_taskbar_list_apps().find(a => a.appName === prop);
+            if (!app) return undefined;
+            return { enumerable: true, configurable: true, value: this.get(_t, prop) };
+        }
+    });
+}
+
+function _framework_shell_make_tray_proxy() {
+    return new Proxy(Object.create(null), {
+        get(_target, prop) {
+            if (typeof prop !== "string") return undefined;
+            if (prop === "list") {
+                return () => framework_taskbar_list_tray_apps().map(a => a.appName);
+            }
+            const app = framework_taskbar_list_tray_apps().find(a => a.appName === prop);
+            if (!app) return undefined;
+            const fn = () => framework_taskbar_invoke_tray_app(prop);
+            fn.appName = app.appName;
+            fn.label   = app.label;
+            /* Convenience handles for force-show / force-hide of the tray icon.
+               Toggling visibility goes through the same path as the overflow
+               popup so persisted hidden-apps state stays consistent. */
+            fn.show = () => framework_taskbar_set_app_visibility(prop, true);
+            fn.hide = () => framework_taskbar_set_app_visibility(prop, false);
+            return fn;
+        },
+        has(_t, prop) {
+            return typeof prop === "string" &&
+                !!framework_taskbar_list_tray_apps().find(a => a.appName === prop);
+        },
+        ownKeys() {
+            return framework_taskbar_list_tray_apps().map(a => a.appName);
+        },
+        getOwnPropertyDescriptor(_t, prop) {
+            const app = framework_taskbar_list_tray_apps().find(a => a.appName === prop);
+            if (!app) return undefined;
+            return { enumerable: true, configurable: true, value: this.get(_t, prop) };
+        }
+    });
+}
+
+function framework_shell_init() {
+    if (typeof window === "undefined") return;
+
+    /* Overwrite unconditionally. ChatGPT's page sets its own window.shell
+       (some internal object without .launcher), so a presence guard would
+       silently skip our installation. The proxies are stateless — replacing
+       the object on every call is cheap and idempotent in effect. We stash
+       any pre-existing value under window.__pageShell in case page code
+       still needs it. */
+    if (window.shell && !window.shell.__tm_framework_shell) {
+        window.__pageShell = window.shell;
+    }
+
+    window.shell = {
+        __tm_framework_shell: true,
+        launcher:   _framework_shell_make_launcher_proxy(),
+        tray:       _framework_shell_make_tray_proxy(),
+        shelltoast: shell_toast_build(),
+
+        startMenu: {
+            open()   { framework_taskbar_toggle_start_menu(); },
+            close()  { framework_taskbar_close_start_menu(); },
+            toggle() { framework_taskbar_toggle_start_menu(); }
+        },
+
+        shellVisibility: {
+            show()     { framework_taskbar_show_shell(); },
+            hide()     { framework_taskbar_hide_shell(); },
+            isHidden() { return framework_taskbar_is_hidden(); }
+        },
+
+        list() {
+            return {
+                launcher: framework_taskbar_list_apps()
+                    .filter(a => a.appName).map(a => a.appName),
+                tray:     framework_taskbar_list_tray_apps().map(a => a.appName)
+            };
+        }
+    };
+}
+
 // ===== src/framework_system_restore.js =====
 // -----------------------------------------------------------------------------
 // framework_system_restore.js — system-restore bootstrap. Reads
@@ -3198,6 +4577,1579 @@ function handle_system_restore() {
             // Malformed state — skip this app.
         }
     }
+}
+
+// ===== src/framework_taskbar.js =====
+// -----------------------------------------------------------------------------
+// framework_taskbar.js — KDE/Ubuntu-style desktop shell + open-windows tracker.
+//
+// Provides:
+//   framework_taskbar_init()                 — idempotent. Builds the full-screen
+//                                            wallpaper, the bottom taskbar
+//                                            (start button, running apps list,
+//                                            system tray, up arrow, clock),
+//                                            and patches ServiceWindow.show /
+//                                            .hide / .defaultMinimize so any
+//                                            ServiceWindow instance is tracked
+//                                            in the running-apps list
+//                                            automatically.
+//   framework_taskbar_register_app(label, onlaunch)
+//                                          — append an entry to the Start menu.
+//                                            Clicking the entry runs onlaunch.
+//   framework_taskbar_minimize_window(sw)    — minimize a tracked ServiceWindow
+//                                            (used by the running-apps button).
+//   framework_taskbar_restore_window(sw)     — restore (un-minimize / show) a
+//                                            tracked ServiceWindow.
+//
+// The taskbar button for a window toggles minimize/restore on click. Hidden
+// windows (closed) are removed from the running-apps list automatically.
+// -----------------------------------------------------------------------------
+
+const TASKBAR_HEIGHT = 40;
+
+let _taskbar_initialized = false;
+let _taskbar_apps        = [];   // [{ label, onlaunch }]
+let _taskbar_windows     = [];   // [{ sw, btn }]
+
+let _taskbar_wallpaper_el  = null;
+let _taskbar_el            = null;
+let _taskbar_running_el    = null;
+let _taskbar_start_btn     = null;
+let _taskbar_start_menu    = null;
+let _taskbar_start_search  = null;
+let _taskbar_start_list    = null;
+let _taskbar_tray_el       = null;
+let _taskbar_clock_el      = null;
+let _taskbar_clock_timer   = null;
+
+function framework_taskbar_init() {
+
+    if (_taskbar_initialized) return;
+    _taskbar_initialized = true;
+
+    _framework_taskbar_build_wallpaper();
+    _framework_taskbar_build_taskbar();
+    _framework_taskbar_build_start_menu();
+    _framework_taskbar_patch_service_window();
+    _framework_taskbar_start_clock();
+    _framework_taskbar_install_hotkey();
+
+    /* Restore the "hidden shell" preference so the user's last choice
+       survives a reload. */
+    if (framework_taskbar_is_hidden()) {
+        framework_taskbar_hide_shell();
+    }
+
+    /* Close start menu when clicking outside it. */
+    document.addEventListener("mousedown", (e) => {
+        if (!_taskbar_start_menu || _taskbar_start_menu.style.display === "none") return;
+        if (_taskbar_start_menu.contains(e.target)) return;
+        if (_taskbar_start_btn.contains(e.target)) return;
+        framework_taskbar_close_start_menu();
+    });
+}
+
+/* Valid JS-identifier (so shell.launcher.<name>() always works). Numbers,
+   letters, _, $; cannot start with a digit. Deliberately strict — dynamic
+   installers must pick a clean appName up-front rather than relying on
+   downstream slug-mangling. */
+function _framework_taskbar_validate_app_name(appName) {
+    if (typeof appName !== "string" || appName.length === 0) {
+        throw new Error("framework_taskbar: appName must be a non-empty string");
+    }
+    if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(appName)) {
+        throw new Error("framework_taskbar: appName '" + appName +
+            "' must be a valid JS identifier (letters/digits/_/$, no leading digit)");
+    }
+}
+
+function framework_taskbar_register_app(label, onlaunch, opts) {
+    opts = opts || {};
+    if (opts.appName) _framework_taskbar_validate_app_name(opts.appName);
+    if (opts.appName && _taskbar_apps.find(a => a.appName === opts.appName)) {
+        throw new Error("framework_taskbar: app '" + opts.appName + "' already registered");
+    }
+    _taskbar_apps.push({
+        label:    label,
+        onlaunch: onlaunch,
+        icon:     opts.icon    || null,
+        title:    opts.title   || null,
+        appName:  opts.appName || null   // for taskbar-icon lookup by ServiceWindow.appName
+    });
+    _framework_taskbar_rebuild_start_list("");
+}
+
+/* Remove a previously-registered Start-menu app. Returns true if removed,
+   false if not found. Safe no-throw API for hot-reload / dynamic uninstall. */
+function framework_taskbar_unregister_app(appName) {
+    const idx = _taskbar_apps.findIndex(a => a.appName === appName);
+    if (idx < 0) return false;
+    _taskbar_apps.splice(idx, 1);
+    _framework_taskbar_rebuild_start_list("");
+    return true;
+}
+
+/* Read-only snapshot of registered Start-menu apps. Used by framework_shell
+   to back the shell.launcher.<name>() Proxy. */
+function framework_taskbar_list_apps() {
+    return _taskbar_apps.map(a => ({
+        appName: a.appName,
+        label:   a.label,
+        icon:    a.icon,
+        title:   a.title
+    }));
+}
+
+/* Invoke a registered Start-menu app's onlaunch by appName. Throws if no
+   matching app is registered or it has no onlaunch. Used by framework_shell
+   so the shell file does not need to reach into the private registry. */
+function framework_taskbar_invoke_app(appName) {
+    const app = _taskbar_apps.find(a => a.appName === appName);
+    if (!app || typeof app.onlaunch !== "function") {
+        throw new Error("framework_taskbar: app '" + appName + "' has no onlaunch");
+    }
+    return app.onlaunch();
+}
+
+/* Resolve a human-readable label for an app by its ServiceWindow.appName.
+   Looks up tray/Start-menu registries so the taskbar shows "Calculator"
+   instead of "calc" and "Code Editor" instead of "editor". Falls back to
+   the appName (capitalised) when no registration matches. */
+function framework_taskbar_get_app_label(appName) {
+    if (!appName) return "Window";
+
+    const trayApp = _tray_apps.find(a =>
+        a.appName === appName || a.label === appName);
+    if (trayApp && trayApp.title) return trayApp.title;
+    if (trayApp && trayApp.label) return trayApp.label;
+
+    const startApp = _taskbar_apps.find(a =>
+        a.appName === appName || a.label === appName);
+    if (startApp && startApp.title) return startApp.title;
+    if (startApp && startApp.label) return startApp.label;
+
+    /* No registry entry — capitalise appName as a last resort. */
+    return appName.charAt(0).toUpperCase() + appName.slice(1);
+}
+
+/* Resolve an icon (inline HTML — emoji or SVG) for an app by its
+   ServiceWindow.appName. Looks up the system-tray registry first (most
+   specific), then the Start-menu app registry. Returns null if no icon
+   is registered under that name. Used by the taskbar's running-apps
+   button renderer to give every open window a recognisable glyph. */
+function framework_taskbar_get_app_icon(appName) {
+    if (!appName) return null;
+
+    /* Tray-app registry — also try matching by label since some callers
+       might use that instead of appName. */
+    const trayApp = _tray_apps.find(a =>
+        a.appName === appName || a.label === appName);
+    if (trayApp && trayApp.icon) return trayApp.icon;
+
+    /* Start-menu app registry — try appName field, then label. */
+    const startApp = _taskbar_apps.find(a =>
+        a.appName === appName || a.label === appName);
+    if (startApp && startApp.icon) return startApp.icon;
+
+    return null;
+}
+
+/* ---- Wallpaper ---- */
+
+function _framework_taskbar_build_wallpaper() {
+
+    const wp = document.createElement("div");
+
+    /* Solid/gradient fallback applied immediately so the user never sees a
+       white flash. If a wallpaper file lives in the IndexedDB-backed src-fs
+       store, we override the background once it loads.
+
+       pointerEvents: "auto" so the wallpaper behaves like an OS desktop —
+       it eats clicks/hovers instead of letting them fall through to the
+       chatgpt.com page underneath. When the user toggles "Hide desktop
+       shell" the wallpaper element gets display:none, which removes it
+       from hit-testing entirely, so the underlying page becomes
+       interactive again. */
+    Object.assign(wp.style, {
+        position: "fixed",
+        left: "0",
+        top: "0",
+        width: "100vw",
+        height: "100vh",
+        zIndex: "1",
+        background: "linear-gradient(135deg, #2b3a55 0%, #1d2b45 50%, #0f1a2e 100%)",
+        pointerEvents: "auto"
+    });
+
+    /* Clicking the empty wallpaper closes any open start menu — mimics OS
+       "click empty desktop dismisses popups" behaviour. */
+    wp.addEventListener("mousedown", () => {
+        framework_taskbar_close_start_menu();
+    });
+
+    document.body.appendChild(wp);
+    _taskbar_wallpaper_el = wp;
+
+    /* Try a few conventional names; first hit wins. service_fs_get returns
+       null (not throws) for missing keys, so the gradient fallback persists
+       cleanly when nothing matches. */
+    (async () => {
+        for (const name of ["wallpaper.jpg", "wallpaper.png", "wallpaper.webp", "wallpaper.jpeg"]) {
+            try {
+                const f = await service_fs_get(name);
+                if (f && f.dataUrl) {
+                    wp.style.background =
+                        "center/cover no-repeat url('" + f.dataUrl + "')";
+                    return;
+                }
+            } catch (e) { /* keep trying / fall through to gradient */ }
+        }
+    })();
+}
+
+/* ---- Taskbar ---- */
+
+/* Inject the keyframes + selectors that drive the start-button icon
+   animations. Idempotent — guarded by a known id on the <style> tag.
+   The four panes carry different shades of white at rest:
+       TL  #ffffff   (pure white)
+       TR  #f0f0f0   (off-white)
+       BL  #d8d8d8   (silver)
+       BR  #b8b8b8   (light grey)
+   On hover, an animation cycles the shades clockwise so the logo looks
+   like it's rotating. On click, .tm-start-icon-clicked plays a quick
+   stagger flash (TL → TR → BR → BL pulse to bright cyan-white) then
+   settles. */
+function _framework_taskbar_inject_styles() {
+
+    if (document.getElementById("tm-taskbar-styles")) return;
+
+    const css =
+        ".tm-pane { transition: fill 180ms ease; }" +
+        ".tm-pane-tl { fill: #ffffff; }" +
+        ".tm-pane-tr { fill: #f0f0f0; }" +
+        ".tm-pane-bl { fill: #d8d8d8; }" +
+        ".tm-pane-br { fill: #b8b8b8; }" +
+
+        /* Hover: each pane runs the same 4-step cycle, but with staggered
+           negative delays so the bright shade walks clockwise around the
+           icon (TL -> TR -> BR -> BL -> TL). */
+        "@keyframes tm-start-rotate {" +
+            "0%   { fill: #ffffff; }" +
+            "25%  { fill: #f0f0f0; }" +
+            "50%  { fill: #d8d8d8; }" +
+            "75%  { fill: #b8b8b8; }" +
+            "100% { fill: #ffffff; }" +
+        "}" +
+        ".tm-start-icon:hover .tm-pane-tl,        .tm-start-btn:hover .tm-pane-tl { animation: tm-start-rotate 1.6s linear infinite;          }" +
+        ".tm-start-icon:hover .tm-pane-tr,        .tm-start-btn:hover .tm-pane-tr { animation: tm-start-rotate 1.6s linear infinite -0.4s;    }" +
+        ".tm-start-icon:hover .tm-pane-br,        .tm-start-btn:hover .tm-pane-br { animation: tm-start-rotate 1.6s linear infinite -0.8s;    }" +
+        ".tm-start-icon:hover .tm-pane-bl,        .tm-start-btn:hover .tm-pane-bl { animation: tm-start-rotate 1.6s linear infinite -1.2s;    }" +
+
+        /* Click: a one-shot stagger flash to bright cyan-white. Each pane
+           uses the same keyframes but a different animation-delay so the
+           bright peak walks TL -> TR -> BR -> BL across ~600ms. */
+        "@keyframes tm-start-flash {" +
+            "0%   { fill: #ffffff; }" +
+            "30%  { fill: #e0f7ff; }" +
+            "60%  { fill: #ffffff; }" +
+            "100% { fill: #ffffff; }" +
+        "}" +
+        ".tm-start-icon-clicked .tm-pane-tl { animation: tm-start-flash 600ms ease-out; }" +
+        ".tm-start-icon-clicked .tm-pane-tr { animation: tm-start-flash 600ms ease-out 80ms; }" +
+        ".tm-start-icon-clicked .tm-pane-br { animation: tm-start-flash 600ms ease-out 160ms; }" +
+        ".tm-start-icon-clicked .tm-pane-bl { animation: tm-start-flash 600ms ease-out 240ms; }";
+
+    const style = document.createElement("style");
+    style.id = "tm-taskbar-styles";
+    style.textContent = css;
+    document.head.appendChild(style);
+}
+
+function _framework_taskbar_build_taskbar() {
+
+    const bar = document.createElement("div");
+
+    Object.assign(bar.style, {
+        position: "fixed",
+        left: "0",
+        bottom: "0",
+        width: "100vw",
+        height: TASKBAR_HEIGHT + "px",
+        zIndex: "1000000",
+        background: "rgba(48, 52, 64, 0.55)",
+        backdropFilter: "blur(18px) saturate(170%) brightness(115%)",
+        webkitBackdropFilter: "blur(18px) saturate(170%) brightness(115%)",
+        /* Top edge drawn as an inset shadow rather than a real border so child
+           buttons (Start, running-apps, system-tray) with their own background
+           paint over it — letting the Start button visually overlap the
+           taskbar's top edge instead of being cut off by it. */
+        boxShadow: "inset 0 1px 0 rgba(255,255,255,0.18), 0 -2px 12px rgba(0,0,0,0.35)",
+        display: "flex",
+        alignItems: "stretch",
+        color: "white",
+        fontFamily: "sans-serif",
+        fontSize: "12px",
+        userSelect: "none"
+    });
+
+    /* Start button (leftmost) — 4-pane white logo + "Start" label.
+       Each pane uses a different shade of white at rest. On hover the panes
+       cycle their shades clockwise (rotation feel). On click the panes flash
+       in a stagger (TL → TR → BR → BL) before settling back. Animations are
+       defined once in framework_taskbar_inject_styles(). */
+    _framework_taskbar_inject_styles();
+
+    const startBtn = document.createElement("button");
+    startBtn.className = "tm-start-btn";
+    startBtn.innerHTML =
+        "<svg class='tm-start-icon' width='20' height='20' viewBox='0 0 24 24' " +
+        "xmlns='http://www.w3.org/2000/svg' " +
+        "style='vertical-align:middle;margin-right:8px'>" +
+            "<rect class='tm-pane tm-pane-tl' x='2'  y='2'  width='9' height='9'/>" +
+            "<rect class='tm-pane tm-pane-tr' x='13' y='2'  width='9' height='9'/>" +
+            "<rect class='tm-pane tm-pane-bl' x='2'  y='13' width='9' height='9'/>" +
+            "<rect class='tm-pane tm-pane-br' x='13' y='13' width='9' height='9'/>" +
+        "</svg>" +
+        "<span>Start</span>";
+    /* Glossy / glass 3D look — solid blue base + a top-half white reflection
+       and a hard reflection line at the midpoint. Inner top highlight + outer
+       drop shadow give it physical depth. Hover and active are the same
+       background recipe shifted lighter / darker. */
+    const startBgRest =
+        "linear-gradient(180deg," +
+            "rgba(255,255,255,0.55) 0%," +
+            "rgba(255,255,255,0.15) 49%," +
+            "rgba(0,0,0,0.05) 50%," +
+            "rgba(255,255,255,0.0) 100%)," +
+        "#2196f3";
+    const startBgHover =
+        "linear-gradient(180deg," +
+            "rgba(255,255,255,0.65) 0%," +
+            "rgba(255,255,255,0.20) 49%," +
+            "rgba(0,0,0,0.05) 50%," +
+            "rgba(255,255,255,0.0) 100%)," +
+        "#42a5f5";
+    const startBgActive =
+        "linear-gradient(180deg," +
+            "rgba(0,0,0,0.10) 0%," +
+            "rgba(255,255,255,0.10) 49%," +
+            "rgba(255,255,255,0.30) 50%," +
+            "rgba(255,255,255,0.0) 100%)," +
+        "#1976d2";
+
+    Object.assign(startBtn.style, {
+        background: startBgRest,
+        color: "white",
+        textShadow: "0 1px 0 rgba(0,0,0,0.35)",
+        border: "none",
+        borderRight: "1px solid rgba(255,255,255,0.12)",
+        padding: "0 14px",
+        cursor: "pointer",
+        fontWeight: "bold",
+        fontSize: "13px",
+        flexShrink: "0",
+        display: "flex",
+        alignItems: "center",
+        boxShadow:
+            "inset 0 1px 0 rgba(255,255,255,0.6)," +
+            "0 2px 4px rgba(0,0,0,0.4)",
+        transition: "background 120ms ease, transform 80ms ease"
+    });
+    startBtn.onmouseover = () => { startBtn.style.background = startBgHover; };
+    startBtn.onmouseout  = () => {
+        startBtn.style.background = startBgRest;
+        startBtn.style.transform  = "none";
+    };
+    startBtn.onmousedown  = () => {
+        startBtn.style.background = startBgActive;
+        /* Tiny press: 1px down + slightly compressed shadow gives the gel a
+           push-in feel without affecting layout of neighbours. */
+        startBtn.style.transform = "translateY(1px)";
+    };
+    startBtn.onmouseup    = () => {
+        startBtn.style.transform = "none";
+    };
+    startBtn.onclick = (e) => {
+        e.stopPropagation();
+        /* Re-trigger click animation: remove + force reflow + re-add. */
+        const icon = startBtn.querySelector(".tm-start-icon");
+        if (icon) {
+            icon.classList.remove("tm-start-icon-clicked");
+            void icon.offsetWidth;
+            icon.classList.add("tm-start-icon-clicked");
+        }
+        framework_taskbar_toggle_start_menu();
+    };
+    bar.appendChild(startBtn);
+    _taskbar_start_btn = startBtn;
+
+    /* Running apps area */
+    const running = document.createElement("div");
+    Object.assign(running.style, {
+        flex: "1",
+        display: "flex",
+        alignItems: "center",
+        gap: "4px",
+        padding: "0 8px",
+        overflow: "hidden"
+    });
+    bar.appendChild(running);
+    _taskbar_running_el = running;
+
+    /* Right-side cluster: up arrow, system tray, clock */
+    const right = document.createElement("div");
+    Object.assign(right.style, {
+        display: "flex",
+        alignItems: "center",
+        gap: "6px",
+        padding: "0 10px",
+        flexShrink: "0",
+        borderLeft: "1px solid rgba(255,255,255,0.08)"
+    });
+
+    /* Up arrow — Windows-style thin chevron, "Show hidden icons" affordance. */
+    const up = document.createElement("button");
+    up.innerHTML =
+        "<svg width='12' height='12' viewBox='0 0 12 12' " +
+        "xmlns='http://www.w3.org/2000/svg' style='display:block'>" +
+            "<polyline points='2,8 6,4 10,8' fill='none' stroke='currentColor' " +
+            "stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/>" +
+        "</svg>";
+    Object.assign(up.style, {
+        background: "transparent",
+        color: "#e6e6e6",
+        border: "none",
+        cursor: "pointer",
+        padding: "6px 8px",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center"
+    });
+    up.title = "Show hidden icons";
+    up.onmouseover = () => { up.style.background = "rgba(255,255,255,0.08)"; };
+    up.onmouseout  = () => { up.style.background = "transparent"; };
+    up.onclick = (e) => {
+        e.stopPropagation();
+        _framework_taskbar_open_tray_overflow(up);
+    };
+    right.appendChild(up);
+
+    /* System tray (empty) */
+    const tray = document.createElement("div");
+    Object.assign(tray.style, {
+        display: "flex",
+        alignItems: "center",
+        gap: "4px",
+        minWidth: "20px",
+        padding: "0 4px"
+    });
+    right.appendChild(tray);
+    _taskbar_tray_el = tray;
+
+    /* Clock — Windows-style: time on top, date below, both white, Segoe UI,
+       equal weight + size. Two-line stack, right-aligned. */
+    const clock = document.createElement("div");
+    Object.assign(clock.style, {
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "flex-end",
+        justifyContent: "center",
+        fontFamily: "'Segoe UI', 'Segoe UI Variable', 'Segoe UI Symbol', system-ui, sans-serif",
+        fontSize: "12px",
+        lineHeight: "1.25",
+        color: "#f0f0f0",
+        minWidth: "78px",
+        padding: "0 4px",
+        cursor: "default"
+    });
+    right.appendChild(clock);
+    _taskbar_clock_el = clock;
+
+    bar.appendChild(right);
+
+    document.body.appendChild(bar);
+    _taskbar_el = bar;
+}
+
+function _framework_taskbar_start_clock() {
+
+    const tick = () => {
+        if (!_taskbar_clock_el) return;
+        const now = new Date();
+        const hh = String(now.getHours()).padStart(2, "0");
+        const mm = String(now.getMinutes()).padStart(2, "0");
+        const dd = String(now.getDate()).padStart(2, "0");
+        const mo = String(now.getMonth() + 1).padStart(2, "0");
+        const yy = now.getFullYear();
+        _taskbar_clock_el.innerHTML =
+            "<div>" + hh + ":" + mm + "</div>" +
+            "<div>" + dd + "-" + mo + "-" + yy + "</div>";
+    };
+
+    tick();
+    _taskbar_clock_timer = setInterval(tick, 15000);
+}
+
+/* ---- Start menu ---- */
+
+function _framework_taskbar_build_start_menu() {
+
+    const menu = document.createElement("div");
+
+    Object.assign(menu.style, {
+        position: "fixed",
+        left: "0",
+        bottom: TASKBAR_HEIGHT + "px",
+        width: "320px",
+        height: "420px",
+        zIndex: "1000001",
+        background: "rgba(56, 60, 72, 0.65)",
+        backdropFilter: "blur(22px) saturate(170%) brightness(115%)",
+        webkitBackdropFilter: "blur(22px) saturate(170%) brightness(115%)",
+        border: "1px solid rgba(255,255,255,0.16)",
+        borderBottom: "none",
+        boxShadow: "0 -4px 24px rgba(0,0,0,0.45)",
+        display: "none",
+        flexDirection: "column",
+        color: "white",
+        fontFamily: "sans-serif",
+        fontSize: "13px"
+    });
+
+    /* Search row: input + arrow button (opens shell options menu). */
+    const searchWrap = document.createElement("div");
+    Object.assign(searchWrap.style, {
+        padding: "10px",
+        borderBottom: "1px solid rgba(255,255,255,0.08)",
+        display: "flex",
+        gap: "6px",
+        alignItems: "center"
+    });
+
+    const search = document.createElement("input");
+    search.type = "text";
+    search.placeholder = "Search apps…";
+    Object.assign(search.style, {
+        flex: "1",
+        boxSizing: "border-box",
+        background: "#15171c",
+        color: "white",
+        border: "1px solid #333",
+        borderRadius: "4px",
+        padding: "6px 8px",
+        fontSize: "13px",
+        outline: "none"
+    });
+    search.addEventListener("input", () => {
+        _framework_taskbar_rebuild_start_list(search.value || "");
+    });
+    search.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+            /* Launch the first visible match. */
+            const first = _taskbar_start_list.querySelector("button[data-app-entry]");
+            if (first) first.click();
+        } else if (e.key === "Escape") {
+            framework_taskbar_close_start_menu();
+        }
+    });
+    searchWrap.appendChild(search);
+    _taskbar_start_search = search;
+
+    /* Arrow button — opens a ServiceMenu anchored at the last pointer
+       position. Currently hosts the "Hide desktop shell" toggle. */
+    const arrow = document.createElement("button");
+    arrow.title = "More options";
+    arrow.innerHTML =
+        "<svg width='12' height='12' viewBox='0 0 12 12' " +
+        "xmlns='http://www.w3.org/2000/svg' style='display:block'>" +
+            "<polyline points='4,2 8,6 4,10' fill='none' stroke='currentColor' " +
+            "stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/>" +
+        "</svg>";
+    Object.assign(arrow.style, {
+        background: "rgba(255,255,255,0.06)",
+        color: "#e6e6e6",
+        border: "1px solid rgba(255,255,255,0.12)",
+        borderRadius: "4px",
+        cursor: "pointer",
+        padding: "5px 7px",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        flexShrink: "0"
+    });
+    arrow.onmouseover = () => { arrow.style.background = "rgba(255,255,255,0.14)"; };
+    arrow.onmouseout  = () => { arrow.style.background = "rgba(255,255,255,0.06)"; };
+    arrow.onclick = (e) => {
+        e.stopPropagation();
+        _framework_taskbar_open_options_menu();
+    };
+    searchWrap.appendChild(arrow);
+
+    menu.appendChild(searchWrap);
+
+    /* Scrollable apps list */
+    const list = document.createElement("div");
+    Object.assign(list.style, {
+        flex: "1",
+        overflowY: "auto",
+        padding: "6px 0"
+    });
+    menu.appendChild(list);
+    _taskbar_start_list = list;
+
+    document.body.appendChild(menu);
+    _taskbar_start_menu = menu;
+}
+
+function _framework_taskbar_rebuild_start_list(filter) {
+
+    if (!_taskbar_start_list) return;
+
+    const f = (filter || "").toLowerCase().trim();
+    _taskbar_start_list.innerHTML = "";
+
+    const matches = _taskbar_apps.filter(a =>
+        !f || a.label.toLowerCase().includes(f)
+    );
+
+    if (matches.length === 0) {
+        const empty = document.createElement("div");
+        empty.textContent = "No apps found";
+        Object.assign(empty.style, {
+            padding: "12px",
+            color: "#888",
+            fontStyle: "italic"
+        });
+        _taskbar_start_list.appendChild(empty);
+        return;
+    }
+
+    matches.forEach(app => {
+        const entry = document.createElement("button");
+        entry.dataset.appEntry = "1";
+        if (app.title) entry.title = app.title;
+
+        Object.assign(entry.style, {
+            display: "flex",
+            alignItems: "center",
+            gap: "10px",
+            width: "100%",
+            textAlign: "left",
+            background: "transparent",
+            color: "white",
+            border: "none",
+            padding: "8px 14px",
+            cursor: "pointer",
+            fontSize: "13px",
+            fontFamily: "inherit"
+        });
+
+        /* Icon slot — fixed 22px square so labels align across rows whether
+           or not an icon was supplied. Falls back to the first character of
+           the label, styled like a tile, so registrations that didn't pass
+           an icon still get a consistent look. Emoji-friendly font stack
+           and a slightly larger font size since the typical icon is an
+           emoji glyph. */
+        const iconEl = document.createElement("span");
+        Object.assign(iconEl.style, {
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: "22px",
+            height: "22px",
+            flexShrink: "0",
+            fontSize: "16px",
+            lineHeight: "1",
+            color: "#cfd2d8",
+            fontFamily: "'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', system-ui, sans-serif"
+        });
+        if (app.icon) {
+            iconEl.innerHTML = app.icon;
+        } else {
+            iconEl.textContent = (app.label || "?").charAt(0);
+            iconEl.style.background = "rgba(255,255,255,0.10)";
+            iconEl.style.borderRadius = "4px";
+            iconEl.style.fontSize = "13px";
+            iconEl.style.fontWeight = "bold";
+        }
+        entry.appendChild(iconEl);
+
+        /* Text stack — primary label on top; if a `title` was supplied AND
+           it differs from the label, show it as a dim second line for
+           context (similar to Windows/KDE start-menu app summaries). */
+        const textWrap = document.createElement("span");
+        Object.assign(textWrap.style, {
+            display: "flex",
+            flexDirection: "column",
+            minWidth: "0",
+            flex: "1"
+        });
+
+        const primary = document.createElement("span");
+        primary.textContent = app.label;
+        Object.assign(primary.style, {
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis"
+        });
+        textWrap.appendChild(primary);
+
+        if (app.title && app.title !== app.label) {
+            const secondary = document.createElement("span");
+            secondary.textContent = app.title;
+            Object.assign(secondary.style, {
+                fontSize: "11px",
+                color: "#9aa0aa",
+                marginTop: "1px",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis"
+            });
+            textWrap.appendChild(secondary);
+        }
+
+        entry.appendChild(textWrap);
+
+        entry.onmouseover = () => { entry.style.background = "rgba(255,255,255,0.08)"; };
+        entry.onmouseout  = () => { entry.style.background = "transparent"; };
+        entry.onclick = () => {
+            framework_taskbar_close_start_menu();
+            try { app.onlaunch(); }
+            catch (err) { console.error("taskbar launch threw:", err); }
+        };
+        _taskbar_start_list.appendChild(entry);
+    });
+}
+
+function framework_taskbar_toggle_start_menu() {
+    if (!_taskbar_start_menu) return;
+    if (_taskbar_start_menu.style.display === "none") {
+        _taskbar_start_menu.style.display = "flex";
+        /* Always paint above whatever window currently has focus.
+           ServiceWindow._zCounter is bumped on every focus, unbounded — so a
+           static z-index on the menu eventually loses. Sync past the live max
+           every time we open. */
+        if (typeof ServiceWindow !== "undefined" && ServiceWindow._zCounter) {
+            _taskbar_start_menu.style.zIndex = String(ServiceWindow._zCounter + 10);
+        }
+        _taskbar_start_search.value = "";
+        _framework_taskbar_rebuild_start_list("");
+        setTimeout(() => _taskbar_start_search.focus(), 0);
+    } else {
+        framework_taskbar_close_start_menu();
+    }
+}
+
+function framework_taskbar_close_start_menu() {
+    if (_taskbar_start_menu) _taskbar_start_menu.style.display = "none";
+}
+
+/* Alt+X toggles the start menu. Alt+W closes the active window (the most
+   recently shown / mousedown'd ServiceWindow — see ServiceWindow._active).
+   Ctrl+1..9 launches the Nth visible system-tray app (left to right) by
+   simulating a click on its tray button — same path as a real user click,
+   so tray-mode windows toggle and ServiceWindow tray-anchoring still works.
+   Listener attached at capture phase on window so it fires regardless of
+   which textarea / button currently has focus. preventDefault +
+   stopPropagation prevent the page from also reacting to the chord. */
+function _framework_taskbar_install_hotkey() {
+
+    window.addEventListener("keydown", (e) => {
+
+        /* Ctrl+1..9 — click the Nth visible tray app. Bare Ctrl only (no
+           Alt/Meta/Shift) so we don't collide with browser tab-switch
+           shortcuts that include other modifiers. */
+        if (e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
+            const n = parseInt(e.key, 10);
+            if (n >= 1 && n <= 9) {
+                if (!_taskbar_tray_el) return;
+                const buttons = Array.from(_taskbar_tray_el.children)
+                    .filter(b => b.offsetParent !== null);
+                const target = buttons[n - 1];
+                if (target) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    target.click();
+                }
+            }
+            return;
+        }
+
+        if (!e.altKey) return;
+        if (e.ctrlKey || e.metaKey || e.shiftKey) return;
+
+        const k = (e.key || "").toLowerCase();
+
+        if (k === "x") {
+            e.preventDefault();
+            e.stopPropagation();
+            framework_taskbar_toggle_start_menu();
+            return;
+        }
+
+        if (k === "w") {
+            const sw = (typeof ServiceWindow !== "undefined") && ServiceWindow.activeWindow();
+            if (sw) {
+                e.preventDefault();
+                e.stopPropagation();
+                /* Use the window's own close path — this routes through the
+                   default close handler, hide(), and persistState(), so the
+                   taskbar entry is removed and the system_restore session
+                   is updated correctly. */
+                sw.defaultClose();
+            }
+            return;
+        }
+    }, true);
+}
+
+/* ---- Open-windows tracking ---- */
+
+function _framework_taskbar_patch_service_window() {
+
+    const origShow = ServiceWindow.prototype.show;
+    const origHide = ServiceWindow.prototype.hide;
+    const origMin  = ServiceWindow.prototype.defaultMinimize;
+    const origMax  = ServiceWindow.prototype.defaultMaximize;
+
+    ServiceWindow.prototype.show = function () {
+        origShow.call(this);
+        _framework_taskbar_on_show(this);
+    };
+
+    ServiceWindow.prototype.hide = function () {
+        origHide.call(this);
+        _framework_taskbar_on_hide(this);
+    };
+
+    ServiceWindow.prototype.defaultMinimize = function () {
+        origMin.call(this);
+        _framework_taskbar_update_button(this);
+    };
+
+    ServiceWindow.prototype.defaultMaximize = function () {
+        origMax.call(this);
+        _framework_taskbar_update_button(this);
+    };
+}
+
+function _framework_taskbar_find_entry(sw) {
+    return _taskbar_windows.find(w => w.sw === sw) || null;
+}
+
+function _framework_taskbar_on_show(sw) {
+
+    if (!_taskbar_running_el) return;
+    /* Tray-hosted windows are represented by their tray icon, not by a
+       running-apps button — skip tracking. */
+    if (sw && sw._trayHandle) return;
+    if (_framework_taskbar_find_entry(sw)) {
+        _framework_taskbar_update_button(sw);
+        return;
+    }
+
+    /* Resolve a label and icon for the taskbar button. Both are looked up
+       by appName from the tray/Start-menu registries — apps register their
+       icon/title once and every running-apps button picks it up
+       automatically. So an editor window with appName="editor" shows up as
+       "Code Editor" with a 📝 glyph, not raw "editor". */
+    const label = framework_taskbar_get_app_label(sw.appName);
+    const icon  = framework_taskbar_get_app_icon(sw.appName);
+
+    const btn = document.createElement("button");
+    btn.title = label;
+
+    /* Glassy resting state. The outer + inner shadows give the pill a
+       slight inset, then the top highlight + bottom accent (set in
+       _update_button) read as a translucent Windows/KDE taskbar tile. */
+    const restBg   = "linear-gradient(180deg, rgba(255,255,255,0.10) 0%, rgba(255,255,255,0.04) 100%)";
+    const hoverBg  = "linear-gradient(180deg, rgba(255,255,255,0.18) 0%, rgba(255,255,255,0.08) 100%)";
+    const activeBg = "linear-gradient(180deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 100%)";
+
+    Object.assign(btn.style, {
+        display: "flex",
+        alignItems: "center",
+        gap: "8px",
+        background: restBg,
+        color: "#f0f0f0",
+        border: "1px solid rgba(255,255,255,0.14)",
+        borderRadius: "5px",
+        padding: "5px 12px",
+        height: "30px",
+        boxSizing: "border-box",
+        cursor: "pointer",
+        fontSize: "12px",
+        fontFamily: "inherit",
+        maxWidth: "210px",
+        flexShrink: "0",
+        boxShadow:
+            "inset 0 1px 0 rgba(255,255,255,0.10)," +
+            "0 1px 2px rgba(0,0,0,0.25)",
+        transition: "background 120ms ease, transform 80ms ease, box-shadow 120ms ease"
+    });
+
+    btn._restBg   = restBg;
+    btn._hoverBg  = hoverBg;
+    btn._activeBg = activeBg;
+
+    btn.onmouseover = () => { btn.style.background = hoverBg; };
+    btn.onmouseout  = () => { btn.style.background = btn._currentBg || restBg; };
+    btn.onmousedown = () => {
+        btn.style.background = activeBg;
+        btn.style.transform  = "translateY(1px)";
+        btn.style.boxShadow  = "inset 0 1px 2px rgba(0,0,0,0.35)";
+    };
+    btn.onmouseup   = () => {
+        btn.style.transform = "none";
+        btn.style.boxShadow =
+            "inset 0 1px 0 rgba(255,255,255,0.10)," +
+            "0 1px 2px rgba(0,0,0,0.25)";
+    };
+
+    /* Icon slot — fixed 16px so labels line up across rows. Emoji-friendly
+       font stack so emoji glyphs render at full size; SVG strings render
+       via innerHTML. Tile fallback (first letter) keeps alignment when no
+       icon was supplied. */
+    const iconEl = document.createElement("span");
+    Object.assign(iconEl.style, {
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: "16px",
+        height: "16px",
+        flexShrink: "0",
+        fontSize: "14px",
+        lineHeight: "1",
+        color: "#e6e8ee",
+        fontFamily: "'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', system-ui, sans-serif"
+    });
+    if (icon) {
+        iconEl.innerHTML = icon;
+    } else {
+        iconEl.textContent = (label || "?").charAt(0).toUpperCase();
+        iconEl.style.background = "rgba(255,255,255,0.16)";
+        iconEl.style.borderRadius = "3px";
+        iconEl.style.fontSize = "10px";
+        iconEl.style.fontWeight = "bold";
+    }
+    btn.appendChild(iconEl);
+
+    const labelEl = document.createElement("span");
+    labelEl.textContent = label;
+    Object.assign(labelEl.style, {
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        minWidth: "0",
+        fontWeight: "500",
+        letterSpacing: "0.1px"
+    });
+    btn.appendChild(labelEl);
+
+    btn.onclick = () => {
+        if (!sw.visible) {
+            sw.show();
+            return;
+        }
+        if (sw.mode === "minimized") {
+            framework_taskbar_restore_window(sw);
+        } else {
+            framework_taskbar_minimize_window(sw);
+        }
+    };
+
+    _taskbar_running_el.appendChild(btn);
+    _taskbar_windows.push({ sw, btn });
+    _framework_taskbar_update_button(sw);
+}
+
+function _framework_taskbar_on_hide(sw) {
+
+    const entry = _framework_taskbar_find_entry(sw);
+    if (!entry) return;
+
+    if (entry.btn.parentElement) entry.btn.parentElement.removeChild(entry.btn);
+    const idx = _taskbar_windows.indexOf(entry);
+    if (idx >= 0) _taskbar_windows.splice(idx, 1);
+}
+
+function _framework_taskbar_update_button(sw) {
+
+    const entry = _framework_taskbar_find_entry(sw);
+    if (!entry) return;
+
+    const btn = entry.btn;
+    const restBg  = btn._restBg  || "rgba(255,255,255,0.08)";
+    const hoverBg = btn._hoverBg || "rgba(255,255,255,0.18)";
+
+    if (sw.mode === "minimized") {
+        /* Dim + no accent — clearly "parked". */
+        btn._currentBg = restBg;
+        btn.style.background = restBg;
+        btn.style.color = "#9aa0aa";
+        btn.style.opacity = "0.75";
+        btn.style.borderBottom = "1px solid rgba(255,255,255,0.14)";
+        btn.style.boxShadow =
+            "inset 0 1px 0 rgba(255,255,255,0.08)," +
+            "0 1px 2px rgba(0,0,0,0.20)";
+    } else {
+        /* Active: brighter fill + crisp 2px cyan accent at the bottom edge.
+           Cache the brighter fill as the "current" background so onmouseout
+           reverts to it (not the dim resting state). */
+        btn._currentBg = hoverBg;
+        btn.style.background = hoverBg;
+        btn.style.color = "white";
+        btn.style.opacity = "1";
+        btn.style.borderBottom = "2px solid #4fc3f7";
+        btn.style.boxShadow =
+            "inset 0 1px 0 rgba(255,255,255,0.18)," +
+            "0 2px 6px rgba(0,0,0,0.30)," +
+            "0 0 0 1px rgba(79,195,247,0.18)";
+    }
+}
+
+/* ---- System tray icons ----
+   Components register a tray icon via framework_taskbar_register_tray_icon.
+   Returns a handle so the caller can remove the icon when its window
+   closes. The button's onClick receives the button DOM node so the caller
+   can compute the popup anchor (e.g. ServiceWindow tray-mode positions
+   itself just above this button). */
+
+function framework_taskbar_register_tray_icon(opts) {
+
+    framework_taskbar_init();
+    if (!_taskbar_tray_el) return null;
+
+    const btn = document.createElement("button");
+    /* Accept either inline HTML (e.g. an SVG) or a plain text/emoji glyph
+       — innerHTML handles both. Falls back to "?" when no icon is given. */
+    btn.innerHTML = opts.icon || "?";
+    if (opts.title) btn.title = opts.title;
+
+    Object.assign(btn.style, {
+        background: "transparent",
+        color: "#e6e6e6",
+        border: "1px solid transparent",
+        borderRadius: "3px",
+        cursor: "pointer",
+        padding: "2px 7px",
+        /* 15px so emoji icons (the typical case) read clearly. Plain
+           text glyphs at this size still look correct on a 26px button. */
+        fontSize: "15px",
+        fontWeight: "normal",
+        fontFamily: "'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', system-ui, sans-serif",
+        lineHeight: "1",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        minWidth: "22px",
+        height: "26px"
+    });
+
+    btn.onmouseover = () => { btn.style.background = "rgba(255,255,255,0.10)"; };
+    btn.onmouseout  = () => { btn.style.background = "transparent"; };
+    btn.onclick = (e) => {
+        e.stopPropagation();
+        if (opts.onClick) opts.onClick(btn);
+    };
+
+    _taskbar_tray_el.appendChild(btn);
+
+    return {
+        button: btn,
+        remove() {
+            if (btn.parentElement) btn.parentElement.removeChild(btn);
+        }
+    };
+}
+
+/* ---- Tray app registry ----
+   Higher-level than framework_taskbar_register_tray_icon. Apps register once;
+   the registry manages whether the icon is currently in the tray (controlled
+   by the user via the up-arrow overflow popup) and persists that preference
+   across reloads.
+
+   Each registration:
+     opts.appName     — REQUIRED. Stable id used as the persistence key.
+     opts.label       — Human-readable name shown in the overflow popup.
+     opts.icon        — Tray glyph (e.g. "C").
+     opts.title       — Tooltip on the tray button.
+     opts.onClick     — (btn) => void. Called when the tray icon is clicked.
+                        Receives the button DOM node (caller uses it for
+                        ServiceWindow tray-mode anchoring). When the user
+                        re-shows a hidden app, a new button is created and
+                        passed to a fresh onClick — apps that need this can
+                        re-adopt via ServiceWindow._adoptTrayButton.
+     opts.onAdopt     — Optional. (btn) => void called every time a fresh
+                        button is created (initial registration AND each
+                        unhide). Use this to rewire the click handler on
+                        the new DOM node. */
+
+const TRAY_HIDDEN_KEY = "tm_tray_hidden_apps";
+
+let _tray_apps = [];   // [{ appName, label, icon, title, onClick, onAdopt, handle }]
+
+function _framework_taskbar_load_hidden() {
+    try {
+        const raw = localStorage.getItem(TRAY_HIDDEN_KEY);
+        if (!raw) return [];
+        const arr = JSON.parse(raw);
+        return Array.isArray(arr) ? arr : [];
+    } catch (e) { return []; }
+}
+
+function _framework_taskbar_save_hidden(arr) {
+    try { localStorage.setItem(TRAY_HIDDEN_KEY, JSON.stringify(arr)); }
+    catch (e) {}
+}
+
+function _framework_taskbar_is_app_hidden(appName) {
+    return _framework_taskbar_load_hidden().indexOf(appName) >= 0;
+}
+
+function _framework_taskbar_set_app_hidden(appName, hidden) {
+    let arr = _framework_taskbar_load_hidden();
+    const idx = arr.indexOf(appName);
+    if (hidden && idx < 0) arr.push(appName);
+    if (!hidden && idx >= 0) arr.splice(idx, 1);
+    _framework_taskbar_save_hidden(arr);
+}
+
+function framework_taskbar_register_tray_app(opts) {
+
+    framework_taskbar_init();
+
+    _framework_taskbar_validate_app_name(opts.appName);
+    if (_tray_apps.find(a => a.appName === opts.appName)) {
+        throw new Error("framework_taskbar: tray app '" + opts.appName + "' already registered");
+    }
+
+    const app = {
+        appName: opts.appName,
+        label:   opts.label || opts.appName,
+        icon:    opts.icon  || (opts.appName || "?").charAt(0).toUpperCase(),
+        title:   opts.title || opts.label || opts.appName,
+        onClick: opts.onClick,
+        onAdopt: opts.onAdopt,
+        handle:  null
+    };
+    _tray_apps.push(app);
+
+    if (!_framework_taskbar_is_app_hidden(app.appName)) {
+        _framework_taskbar_show_app(app);
+    }
+
+    return {
+        /* Programmatic show/hide — same path as the user's overflow toggle. */
+        setVisible(on) {
+            framework_taskbar_set_app_visibility(app.appName, on);
+        }
+    };
+}
+
+/* Remove a previously-registered tray app. Returns true if removed,
+   false if not found. Safe no-throw API for hot-reload / dynamic uninstall.
+   Also tears down the live tray button (if any) so the icon disappears. */
+function framework_taskbar_unregister_tray_app(appName) {
+    const idx = _tray_apps.findIndex(a => a.appName === appName);
+    if (idx < 0) return false;
+    const app = _tray_apps[idx];
+    _framework_taskbar_hide_app(app);
+    _tray_apps.splice(idx, 1);
+    return true;
+}
+
+function _framework_taskbar_show_app(app) {
+    if (app.handle) return;   // already shown
+    app.handle = framework_taskbar_register_tray_icon({
+        icon:  app.icon,
+        title: app.title,
+        onClick: (btn) => {
+            if (app.onClick) app.onClick(btn);
+        }
+    });
+    if (app.handle && app.onAdopt) {
+        try { app.onAdopt(app.handle.button); } catch (e) { console.error(e); }
+    }
+}
+
+function _framework_taskbar_hide_app(app) {
+    if (!app.handle) return;
+    app.handle.remove();
+    app.handle = null;
+}
+
+function framework_taskbar_set_app_visibility(appName, on) {
+    const app = _tray_apps.find(a => a.appName === appName);
+    if (!app) return;
+    _framework_taskbar_set_app_hidden(appName, !on);
+    if (on) _framework_taskbar_show_app(app);
+    else    _framework_taskbar_hide_app(app);
+}
+
+/* Look up the live tray button for an app, if currently visible.
+   Returns null if the app isn't registered or is hidden. Used by
+   component_*_create paths that want to wire the ServiceWindow against
+   whatever button currently exists. */
+function framework_taskbar_get_tray_button(appName) {
+    const app = _tray_apps.find(a => a.appName === appName);
+    if (!app || !app.handle) return null;
+    return app.handle.button;
+}
+
+/* Read-only snapshot of the registered tray apps. Used by
+   framework_orphan_cleanup to detect stale entries in the
+   tm_tray_hidden_apps list. Returns shallow clones — callers must not
+   mutate live registry state. */
+function framework_taskbar_list_tray_apps() {
+    return _tray_apps.map(a => ({
+        appName: a.appName,
+        label:   a.label,
+        icon:    a.icon
+    }));
+}
+
+/* Invoke a registered tray app's onClick by appName. Re-uses the live tray
+   button (if visible) so click-coordinate-dependent decoration (the tail)
+   positions correctly. Throws if no matching tray app is registered. */
+function framework_taskbar_invoke_tray_app(appName) {
+    const app = _tray_apps.find(a => a.appName === appName);
+    if (!app) {
+        throw new Error("framework_taskbar: tray app '" + appName + "' is not registered");
+    }
+    const btn = framework_taskbar_get_tray_button(appName);
+    if (typeof app.onClick === "function") app.onClick(btn);
+}
+
+/* ---- Tray overflow popup ----
+   Opened by clicking the up-arrow in the right-side cluster. Lists every
+   registered tray app with: name, a Launch button, and a Show-in-tray
+   toggle. A search box at the top filters the list by label. The popup
+   styling mirrors ServiceMenu (glass panel) so it feels consistent. */
+
+let _tray_overflow_popup = null;
+
+function _framework_taskbar_close_tray_overflow() {
+    if (_tray_overflow_popup) {
+        if (_tray_overflow_popup._cleanup) _tray_overflow_popup._cleanup();
+        if (_tray_overflow_popup.parentNode) {
+            _tray_overflow_popup.parentNode.removeChild(_tray_overflow_popup);
+        }
+        _tray_overflow_popup = null;
+    }
+}
+
+function _framework_taskbar_open_tray_overflow(anchorBtn) {
+
+    _framework_taskbar_close_tray_overflow();
+
+    const popup = document.createElement("div");
+    Object.assign(popup.style, {
+        position: "fixed",
+        width: "300px",
+        maxHeight: "360px",
+        zIndex: "1000010",
+        background: "rgba(28, 30, 36, 0.78)",
+        backdropFilter: "blur(22px) saturate(160%)",
+        webkitBackdropFilter: "blur(22px) saturate(160%)",
+        border: "1px solid rgba(255,255,255,0.12)",
+        borderRadius: "6px",
+        boxShadow: "0 8px 28px rgba(0,0,0,0.55)",
+        color: "white",
+        fontFamily: "'Segoe UI', system-ui, sans-serif",
+        fontSize: "13px",
+        userSelect: "none",
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden"
+    });
+
+    /* Search box */
+    const searchWrap = document.createElement("div");
+    Object.assign(searchWrap.style, {
+        padding: "8px",
+        borderBottom: "1px solid rgba(255,255,255,0.08)"
+    });
+    const search = document.createElement("input");
+    search.type = "text";
+    search.placeholder = "Search tray apps…";
+    Object.assign(search.style, {
+        width: "100%",
+        boxSizing: "border-box",
+        background: "#15171c",
+        color: "white",
+        border: "1px solid #333",
+        borderRadius: "4px",
+        padding: "6px 8px",
+        fontSize: "13px",
+        fontFamily: "inherit",
+        outline: "none"
+    });
+    searchWrap.appendChild(search);
+    popup.appendChild(searchWrap);
+
+    /* Scrollable list */
+    const list = document.createElement("div");
+    Object.assign(list.style, {
+        flex: "1",
+        overflowY: "auto",
+        padding: "4px 0"
+    });
+    popup.appendChild(list);
+
+    const rebuild = () => {
+        const f = (search.value || "").toLowerCase().trim();
+        list.innerHTML = "";
+
+        const matches = _tray_apps.filter(a =>
+            !f || (a.label || "").toLowerCase().includes(f)
+        );
+
+        if (matches.length === 0) {
+            const empty = document.createElement("div");
+            empty.textContent = _tray_apps.length === 0
+                ? "No tray apps registered"
+                : "No matches";
+            Object.assign(empty.style, {
+                padding: "12px 14px",
+                color: "#888",
+                fontStyle: "italic"
+            });
+            list.appendChild(empty);
+            return;
+        }
+
+        for (const app of matches) {
+            const row = document.createElement("div");
+            Object.assign(row.style, {
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                padding: "6px 10px"
+            });
+
+            const labelEl = document.createElement("span");
+            labelEl.textContent = app.label;
+            Object.assign(labelEl.style, {
+                flex: "1",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis"
+            });
+            row.appendChild(labelEl);
+
+            const launchBtn = document.createElement("button");
+            launchBtn.textContent = "Launch";
+            Object.assign(launchBtn.style, {
+                background: "#4fc3f7",
+                color: "#000",
+                border: "none",
+                borderRadius: "3px",
+                padding: "3px 10px",
+                cursor: "pointer",
+                fontSize: "12px",
+                fontWeight: "bold",
+                fontFamily: "inherit",
+                flexShrink: "0"
+            });
+            launchBtn.onclick = () => {
+                /* If hidden, temporarily ensure the icon exists so onClick
+                   has a button to anchor against. We don't permanently
+                   re-show it — the toggle controls that. Instead we pass
+                   the up-arrow as the anchor when hidden. */
+                if (app.handle && app.handle.button) {
+                    app.onClick(app.handle.button);
+                } else {
+                    app.onClick(anchorBtn);
+                }
+                _framework_taskbar_close_tray_overflow();
+            };
+            row.appendChild(launchBtn);
+
+            /* Show-in-tray toggle */
+            const visible = !_framework_taskbar_is_app_hidden(app.appName);
+            const sw = _service_menu_make_switch(visible);
+            sw.el.style.cursor = "pointer";
+            sw.el.title = "Show in tray";
+            sw.el.addEventListener("click", () => {
+                const next = _framework_taskbar_is_app_hidden(app.appName);  // toggle: hidden -> visible
+                framework_taskbar_set_app_visibility(app.appName, next);
+                sw.set(next);
+            });
+            row.appendChild(sw.el);
+
+            list.appendChild(row);
+        }
+    };
+
+    search.addEventListener("input", rebuild);
+    search.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") _framework_taskbar_close_tray_overflow();
+    });
+
+    rebuild();
+
+    document.body.appendChild(popup);
+    _tray_overflow_popup = popup;
+
+    /* Anchor: above the up-arrow, right-aligned to its right edge. */
+    requestAnimationFrame(() => {
+        const r = anchorBtn.getBoundingClientRect();
+        const pr = popup.getBoundingClientRect();
+        let left = Math.round(r.right - pr.width);
+        let top  = Math.round(r.top - pr.height - 8);
+        left = Math.max(8, Math.min(left, window.innerWidth - pr.width - 8));
+        top  = Math.max(8, top);
+        popup.style.left = left + "px";
+        popup.style.top  = top  + "px";
+        setTimeout(() => search.focus(), 0);
+    });
+
+    /* Outside click / Escape close */
+    const onDown = (e) => {
+        if (popup.contains(e.target)) return;
+        if (anchorBtn.contains(e.target)) return;
+        _framework_taskbar_close_tray_overflow();
+    };
+    const onKey = (e) => {
+        if (e.key === "Escape") _framework_taskbar_close_tray_overflow();
+    };
+    setTimeout(() => {
+        document.addEventListener("mousedown", onDown, true);
+        document.addEventListener("keydown",   onKey,  true);
+    }, 0);
+    popup._cleanup = () => {
+        document.removeEventListener("mousedown", onDown, true);
+        document.removeEventListener("keydown",   onKey,  true);
+    };
+}
+
+function framework_taskbar_minimize_window(sw) {
+    if (!sw) return;
+    if (sw.mode !== "minimized") sw.defaultMinimize();
+}
+
+function framework_taskbar_restore_window(sw) {
+    if (!sw) return;
+    if (!sw.visible) sw.show();
+    if (sw.mode === "minimized") sw.defaultMinimize();   // toggles back to normal
+}
+
+/* ---- Shell visibility ----
+   "Hide" the kdeubuntu shell means: take down the wallpaper and taskbar (and
+   close any open start menu / options menu), then drop a small floating
+   restore button at the bottom-right corner — same general anchor the simple
+   stacked launcher buttons used to live in. Clicking it brings the shell
+   back. State is kept in localStorage so the user's choice survives a reload. */
+
+const TASKBAR_HIDDEN_KEY = "tm_taskbar_shell_hidden";
+
+let _taskbar_restore_btn  = null;
+let _taskbar_options_menu = null;
+
+function _framework_taskbar_open_options_menu() {
+
+    /* Anchor the popup at the last pointer position so it appears under the
+       user's mouse / touch (the requested behaviour). The menu also clamps
+       itself to the viewport, so anchoring at the arrow when the user
+       arrived via Alt+X (no recent click on the arrow) still works. */
+    const p = service_menu_last_pointer();
+
+    if (_taskbar_options_menu) _taskbar_options_menu.close();
+    _taskbar_options_menu = new ServiceMenu();
+
+    _taskbar_options_menu
+        .addToggle({
+            label: "Hide desktop shell",
+            getter: () => framework_taskbar_is_hidden(),
+            setter: (on) => {
+                if (on) framework_taskbar_hide_shell();
+                else    framework_taskbar_show_shell();
+            }
+        })
+        .openAt(p.x, p.y);
+}
+
+function framework_taskbar_is_hidden() {
+    try { return localStorage.getItem(TASKBAR_HIDDEN_KEY) === "true"; }
+    catch (e) { return false; }
+}
+
+function _framework_taskbar_set_hidden(flag) {
+    try { localStorage.setItem(TASKBAR_HIDDEN_KEY, flag ? "true" : "false"); }
+    catch (e) {}
+}
+
+function framework_taskbar_hide_shell() {
+
+    framework_taskbar_close_start_menu();
+
+    if (_taskbar_wallpaper_el) _taskbar_wallpaper_el.style.display = "none";
+    if (_taskbar_el)           _taskbar_el.style.display           = "none";
+
+    _framework_taskbar_set_hidden(true);
+    _framework_taskbar_show_restore_btn();
+}
+
+function framework_taskbar_show_shell() {
+
+    if (_taskbar_wallpaper_el) _taskbar_wallpaper_el.style.display = "block";
+    if (_taskbar_el)           _taskbar_el.style.display           = "flex";
+
+    _framework_taskbar_set_hidden(false);
+    _framework_taskbar_hide_restore_btn();
+}
+
+/* Floating restore button, bottom-right. Mirrors the simple-launcher anchor
+   on the opposite corner so it doesn't visually clash with whatever the
+   user is doing. */
+function _framework_taskbar_show_restore_btn() {
+
+    if (_taskbar_restore_btn) {
+        _taskbar_restore_btn.style.display = "flex";
+        return;
+    }
+
+    const btn = document.createElement("button");
+    btn.title = "Show desktop shell";
+    btn.innerHTML =
+        "<svg width='16' height='16' viewBox='0 0 24 24' " +
+        "xmlns='http://www.w3.org/2000/svg'>" +
+            "<rect x='2'  y='2'  width='9' height='9' fill='#ffffff'/>" +
+            "<rect x='13' y='2'  width='9' height='9' fill='#f0f0f0'/>" +
+            "<rect x='2'  y='13' width='9' height='9' fill='#d8d8d8'/>" +
+            "<rect x='13' y='13' width='9' height='9' fill='#b8b8b8'/>" +
+        "</svg>";
+    Object.assign(btn.style, {
+        position: "fixed",
+        right: "12px",
+        bottom: "12px",
+        zIndex: "1000005",
+        width: "32px",
+        height: "32px",
+        background: "#1976d2",
+        color: "white",
+        border: "1px solid rgba(255,255,255,0.2)",
+        borderRadius: "6px",
+        cursor: "pointer",
+        boxShadow: "0 4px 14px rgba(0,0,0,0.4)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center"
+    });
+    btn.onmouseover = () => { btn.style.background = "#2196f3"; };
+    btn.onmouseout  = () => { btn.style.background = "#1976d2"; };
+    btn.onclick = () => {
+        framework_taskbar_show_shell();
+    };
+
+    document.body.appendChild(btn);
+    _taskbar_restore_btn = btn;
+}
+
+function _framework_taskbar_hide_restore_btn() {
+    if (_taskbar_restore_btn) _taskbar_restore_btn.style.display = "none";
 }
 
 // ===== src/service_console.js =====
@@ -4111,1502 +7063,6 @@ function _service_menu_make_switch(initial) {
     };
 }
 
-// ===== src/service_taskbar.js =====
-// -----------------------------------------------------------------------------
-// service_taskbar.js — KDE/Ubuntu-style desktop shell + open-windows tracker.
-//
-// Provides:
-//   service_taskbar_init()                 — idempotent. Builds the full-screen
-//                                            wallpaper, the bottom taskbar
-//                                            (start button, running apps list,
-//                                            system tray, up arrow, clock),
-//                                            and patches ServiceWindow.show /
-//                                            .hide / .defaultMinimize so any
-//                                            ServiceWindow instance is tracked
-//                                            in the running-apps list
-//                                            automatically.
-//   service_taskbar_register_app(label, onlaunch)
-//                                          — append an entry to the Start menu.
-//                                            Clicking the entry runs onlaunch.
-//   service_taskbar_minimize_window(sw)    — minimize a tracked ServiceWindow
-//                                            (used by the running-apps button).
-//   service_taskbar_restore_window(sw)     — restore (un-minimize / show) a
-//                                            tracked ServiceWindow.
-//
-// The taskbar button for a window toggles minimize/restore on click. Hidden
-// windows (closed) are removed from the running-apps list automatically.
-// -----------------------------------------------------------------------------
-
-const TASKBAR_HEIGHT = 40;
-
-let _taskbar_initialized = false;
-let _taskbar_apps        = [];   // [{ label, onlaunch }]
-let _taskbar_windows     = [];   // [{ sw, btn }]
-
-let _taskbar_wallpaper_el  = null;
-let _taskbar_el            = null;
-let _taskbar_running_el    = null;
-let _taskbar_start_btn     = null;
-let _taskbar_start_menu    = null;
-let _taskbar_start_search  = null;
-let _taskbar_start_list    = null;
-let _taskbar_tray_el       = null;
-let _taskbar_clock_el      = null;
-let _taskbar_clock_timer   = null;
-
-function service_taskbar_init() {
-
-    if (_taskbar_initialized) return;
-    _taskbar_initialized = true;
-
-    _service_taskbar_build_wallpaper();
-    _service_taskbar_build_taskbar();
-    _service_taskbar_build_start_menu();
-    _service_taskbar_patch_service_window();
-    _service_taskbar_start_clock();
-    _service_taskbar_install_hotkey();
-
-    /* Restore the "hidden shell" preference so the user's last choice
-       survives a reload. */
-    if (_service_taskbar_is_hidden()) {
-        _service_taskbar_hide_shell();
-    }
-
-    /* Close start menu when clicking outside it. */
-    document.addEventListener("mousedown", (e) => {
-        if (!_taskbar_start_menu || _taskbar_start_menu.style.display === "none") return;
-        if (_taskbar_start_menu.contains(e.target)) return;
-        if (_taskbar_start_btn.contains(e.target)) return;
-        _service_taskbar_close_start_menu();
-    });
-}
-
-function service_taskbar_register_app(label, onlaunch, opts) {
-    opts = opts || {};
-    _taskbar_apps.push({
-        label:    label,
-        onlaunch: onlaunch,
-        icon:     opts.icon    || null,
-        title:    opts.title   || null,
-        appName:  opts.appName || null   // for taskbar-icon lookup by ServiceWindow.appName
-    });
-    _service_taskbar_rebuild_start_list("");
-}
-
-/* Resolve a human-readable label for an app by its ServiceWindow.appName.
-   Looks up tray/Start-menu registries so the taskbar shows "Calculator"
-   instead of "calc" and "Code Editor" instead of "editor". Falls back to
-   the appName (capitalised) when no registration matches. */
-function service_taskbar_get_app_label(appName) {
-    if (!appName) return "Window";
-
-    const trayApp = _tray_apps.find(a =>
-        a.appName === appName || a.label === appName);
-    if (trayApp && trayApp.title) return trayApp.title;
-    if (trayApp && trayApp.label) return trayApp.label;
-
-    const startApp = _taskbar_apps.find(a =>
-        a.appName === appName || a.label === appName);
-    if (startApp && startApp.title) return startApp.title;
-    if (startApp && startApp.label) return startApp.label;
-
-    /* No registry entry — capitalise appName as a last resort. */
-    return appName.charAt(0).toUpperCase() + appName.slice(1);
-}
-
-/* Resolve an icon (inline HTML — emoji or SVG) for an app by its
-   ServiceWindow.appName. Looks up the system-tray registry first (most
-   specific), then the Start-menu app registry. Returns null if no icon
-   is registered under that name. Used by the taskbar's running-apps
-   button renderer to give every open window a recognisable glyph. */
-function service_taskbar_get_app_icon(appName) {
-    if (!appName) return null;
-
-    /* Tray-app registry — also try matching by label since some callers
-       might use that instead of appName. */
-    const trayApp = _tray_apps.find(a =>
-        a.appName === appName || a.label === appName);
-    if (trayApp && trayApp.icon) return trayApp.icon;
-
-    /* Start-menu app registry — try appName field, then label. */
-    const startApp = _taskbar_apps.find(a =>
-        a.appName === appName || a.label === appName);
-    if (startApp && startApp.icon) return startApp.icon;
-
-    return null;
-}
-
-/* ---- Wallpaper ---- */
-
-function _service_taskbar_build_wallpaper() {
-
-    const wp = document.createElement("div");
-
-    /* Solid/gradient fallback applied immediately so the user never sees a
-       white flash. If a wallpaper file lives in the IndexedDB-backed src-fs
-       store, we override the background once it loads.
-
-       pointerEvents: "auto" so the wallpaper behaves like an OS desktop —
-       it eats clicks/hovers instead of letting them fall through to the
-       chatgpt.com page underneath. When the user toggles "Hide desktop
-       shell" the wallpaper element gets display:none, which removes it
-       from hit-testing entirely, so the underlying page becomes
-       interactive again. */
-    Object.assign(wp.style, {
-        position: "fixed",
-        left: "0",
-        top: "0",
-        width: "100vw",
-        height: "100vh",
-        zIndex: "1",
-        background: "linear-gradient(135deg, #2b3a55 0%, #1d2b45 50%, #0f1a2e 100%)",
-        pointerEvents: "auto"
-    });
-
-    /* Clicking the empty wallpaper closes any open start menu — mimics OS
-       "click empty desktop dismisses popups" behaviour. */
-    wp.addEventListener("mousedown", () => {
-        _service_taskbar_close_start_menu();
-    });
-
-    document.body.appendChild(wp);
-    _taskbar_wallpaper_el = wp;
-
-    /* Try a few conventional names; first hit wins. service_fs_get returns
-       null (not throws) for missing keys, so the gradient fallback persists
-       cleanly when nothing matches. */
-    (async () => {
-        for (const name of ["wallpaper.jpg", "wallpaper.png", "wallpaper.webp", "wallpaper.jpeg"]) {
-            try {
-                const f = await service_fs_get(name);
-                if (f && f.dataUrl) {
-                    wp.style.background =
-                        "center/cover no-repeat url('" + f.dataUrl + "')";
-                    return;
-                }
-            } catch (e) { /* keep trying / fall through to gradient */ }
-        }
-    })();
-}
-
-/* ---- Taskbar ---- */
-
-/* Inject the keyframes + selectors that drive the start-button icon
-   animations. Idempotent — guarded by a known id on the <style> tag.
-   The four panes carry different shades of white at rest:
-       TL  #ffffff   (pure white)
-       TR  #f0f0f0   (off-white)
-       BL  #d8d8d8   (silver)
-       BR  #b8b8b8   (light grey)
-   On hover, an animation cycles the shades clockwise so the logo looks
-   like it's rotating. On click, .tm-start-icon-clicked plays a quick
-   stagger flash (TL → TR → BR → BL pulse to bright cyan-white) then
-   settles. */
-function _service_taskbar_inject_styles() {
-
-    if (document.getElementById("tm-taskbar-styles")) return;
-
-    const css =
-        ".tm-pane { transition: fill 180ms ease; }" +
-        ".tm-pane-tl { fill: #ffffff; }" +
-        ".tm-pane-tr { fill: #f0f0f0; }" +
-        ".tm-pane-bl { fill: #d8d8d8; }" +
-        ".tm-pane-br { fill: #b8b8b8; }" +
-
-        /* Hover: each pane runs the same 4-step cycle, but with staggered
-           negative delays so the bright shade walks clockwise around the
-           icon (TL -> TR -> BR -> BL -> TL). */
-        "@keyframes tm-start-rotate {" +
-            "0%   { fill: #ffffff; }" +
-            "25%  { fill: #f0f0f0; }" +
-            "50%  { fill: #d8d8d8; }" +
-            "75%  { fill: #b8b8b8; }" +
-            "100% { fill: #ffffff; }" +
-        "}" +
-        ".tm-start-icon:hover .tm-pane-tl,        .tm-start-btn:hover .tm-pane-tl { animation: tm-start-rotate 1.6s linear infinite;          }" +
-        ".tm-start-icon:hover .tm-pane-tr,        .tm-start-btn:hover .tm-pane-tr { animation: tm-start-rotate 1.6s linear infinite -0.4s;    }" +
-        ".tm-start-icon:hover .tm-pane-br,        .tm-start-btn:hover .tm-pane-br { animation: tm-start-rotate 1.6s linear infinite -0.8s;    }" +
-        ".tm-start-icon:hover .tm-pane-bl,        .tm-start-btn:hover .tm-pane-bl { animation: tm-start-rotate 1.6s linear infinite -1.2s;    }" +
-
-        /* Click: a one-shot stagger flash to bright cyan-white. Each pane
-           uses the same keyframes but a different animation-delay so the
-           bright peak walks TL -> TR -> BR -> BL across ~600ms. */
-        "@keyframes tm-start-flash {" +
-            "0%   { fill: #ffffff; }" +
-            "30%  { fill: #e0f7ff; }" +
-            "60%  { fill: #ffffff; }" +
-            "100% { fill: #ffffff; }" +
-        "}" +
-        ".tm-start-icon-clicked .tm-pane-tl { animation: tm-start-flash 600ms ease-out; }" +
-        ".tm-start-icon-clicked .tm-pane-tr { animation: tm-start-flash 600ms ease-out 80ms; }" +
-        ".tm-start-icon-clicked .tm-pane-br { animation: tm-start-flash 600ms ease-out 160ms; }" +
-        ".tm-start-icon-clicked .tm-pane-bl { animation: tm-start-flash 600ms ease-out 240ms; }";
-
-    const style = document.createElement("style");
-    style.id = "tm-taskbar-styles";
-    style.textContent = css;
-    document.head.appendChild(style);
-}
-
-function _service_taskbar_build_taskbar() {
-
-    const bar = document.createElement("div");
-
-    Object.assign(bar.style, {
-        position: "fixed",
-        left: "0",
-        bottom: "0",
-        width: "100vw",
-        height: TASKBAR_HEIGHT + "px",
-        zIndex: "1000000",
-        background: "rgba(48, 52, 64, 0.55)",
-        backdropFilter: "blur(18px) saturate(170%) brightness(115%)",
-        webkitBackdropFilter: "blur(18px) saturate(170%) brightness(115%)",
-        /* Top edge drawn as an inset shadow rather than a real border so child
-           buttons (Start, running-apps, system-tray) with their own background
-           paint over it — letting the Start button visually overlap the
-           taskbar's top edge instead of being cut off by it. */
-        boxShadow: "inset 0 1px 0 rgba(255,255,255,0.18), 0 -2px 12px rgba(0,0,0,0.35)",
-        display: "flex",
-        alignItems: "stretch",
-        color: "white",
-        fontFamily: "sans-serif",
-        fontSize: "12px",
-        userSelect: "none"
-    });
-
-    /* Start button (leftmost) — 4-pane white logo + "Start" label.
-       Each pane uses a different shade of white at rest. On hover the panes
-       cycle their shades clockwise (rotation feel). On click the panes flash
-       in a stagger (TL → TR → BR → BL) before settling back. Animations are
-       defined once in service_taskbar_inject_styles(). */
-    _service_taskbar_inject_styles();
-
-    const startBtn = document.createElement("button");
-    startBtn.className = "tm-start-btn";
-    startBtn.innerHTML =
-        "<svg class='tm-start-icon' width='20' height='20' viewBox='0 0 24 24' " +
-        "xmlns='http://www.w3.org/2000/svg' " +
-        "style='vertical-align:middle;margin-right:8px'>" +
-            "<rect class='tm-pane tm-pane-tl' x='2'  y='2'  width='9' height='9'/>" +
-            "<rect class='tm-pane tm-pane-tr' x='13' y='2'  width='9' height='9'/>" +
-            "<rect class='tm-pane tm-pane-bl' x='2'  y='13' width='9' height='9'/>" +
-            "<rect class='tm-pane tm-pane-br' x='13' y='13' width='9' height='9'/>" +
-        "</svg>" +
-        "<span>Start</span>";
-    /* Glossy / glass 3D look — solid blue base + a top-half white reflection
-       and a hard reflection line at the midpoint. Inner top highlight + outer
-       drop shadow give it physical depth. Hover and active are the same
-       background recipe shifted lighter / darker. */
-    const startBgRest =
-        "linear-gradient(180deg," +
-            "rgba(255,255,255,0.55) 0%," +
-            "rgba(255,255,255,0.15) 49%," +
-            "rgba(0,0,0,0.05) 50%," +
-            "rgba(255,255,255,0.0) 100%)," +
-        "#2196f3";
-    const startBgHover =
-        "linear-gradient(180deg," +
-            "rgba(255,255,255,0.65) 0%," +
-            "rgba(255,255,255,0.20) 49%," +
-            "rgba(0,0,0,0.05) 50%," +
-            "rgba(255,255,255,0.0) 100%)," +
-        "#42a5f5";
-    const startBgActive =
-        "linear-gradient(180deg," +
-            "rgba(0,0,0,0.10) 0%," +
-            "rgba(255,255,255,0.10) 49%," +
-            "rgba(255,255,255,0.30) 50%," +
-            "rgba(255,255,255,0.0) 100%)," +
-        "#1976d2";
-
-    Object.assign(startBtn.style, {
-        background: startBgRest,
-        color: "white",
-        textShadow: "0 1px 0 rgba(0,0,0,0.35)",
-        border: "none",
-        borderRight: "1px solid rgba(255,255,255,0.12)",
-        padding: "0 14px",
-        cursor: "pointer",
-        fontWeight: "bold",
-        fontSize: "13px",
-        flexShrink: "0",
-        display: "flex",
-        alignItems: "center",
-        boxShadow:
-            "inset 0 1px 0 rgba(255,255,255,0.6)," +
-            "0 2px 4px rgba(0,0,0,0.4)",
-        transition: "background 120ms ease, transform 80ms ease"
-    });
-    startBtn.onmouseover = () => { startBtn.style.background = startBgHover; };
-    startBtn.onmouseout  = () => {
-        startBtn.style.background = startBgRest;
-        startBtn.style.transform  = "none";
-    };
-    startBtn.onmousedown  = () => {
-        startBtn.style.background = startBgActive;
-        /* Tiny press: 1px down + slightly compressed shadow gives the gel a
-           push-in feel without affecting layout of neighbours. */
-        startBtn.style.transform = "translateY(1px)";
-    };
-    startBtn.onmouseup    = () => {
-        startBtn.style.transform = "none";
-    };
-    startBtn.onclick = (e) => {
-        e.stopPropagation();
-        /* Re-trigger click animation: remove + force reflow + re-add. */
-        const icon = startBtn.querySelector(".tm-start-icon");
-        if (icon) {
-            icon.classList.remove("tm-start-icon-clicked");
-            void icon.offsetWidth;
-            icon.classList.add("tm-start-icon-clicked");
-        }
-        _service_taskbar_toggle_start_menu();
-    };
-    bar.appendChild(startBtn);
-    _taskbar_start_btn = startBtn;
-
-    /* Running apps area */
-    const running = document.createElement("div");
-    Object.assign(running.style, {
-        flex: "1",
-        display: "flex",
-        alignItems: "center",
-        gap: "4px",
-        padding: "0 8px",
-        overflow: "hidden"
-    });
-    bar.appendChild(running);
-    _taskbar_running_el = running;
-
-    /* Right-side cluster: up arrow, system tray, clock */
-    const right = document.createElement("div");
-    Object.assign(right.style, {
-        display: "flex",
-        alignItems: "center",
-        gap: "6px",
-        padding: "0 10px",
-        flexShrink: "0",
-        borderLeft: "1px solid rgba(255,255,255,0.08)"
-    });
-
-    /* Up arrow — Windows-style thin chevron, "Show hidden icons" affordance. */
-    const up = document.createElement("button");
-    up.innerHTML =
-        "<svg width='12' height='12' viewBox='0 0 12 12' " +
-        "xmlns='http://www.w3.org/2000/svg' style='display:block'>" +
-            "<polyline points='2,8 6,4 10,8' fill='none' stroke='currentColor' " +
-            "stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/>" +
-        "</svg>";
-    Object.assign(up.style, {
-        background: "transparent",
-        color: "#e6e6e6",
-        border: "none",
-        cursor: "pointer",
-        padding: "6px 8px",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center"
-    });
-    up.title = "Show hidden icons";
-    up.onmouseover = () => { up.style.background = "rgba(255,255,255,0.08)"; };
-    up.onmouseout  = () => { up.style.background = "transparent"; };
-    up.onclick = (e) => {
-        e.stopPropagation();
-        _service_taskbar_open_tray_overflow(up);
-    };
-    right.appendChild(up);
-
-    /* System tray (empty) */
-    const tray = document.createElement("div");
-    Object.assign(tray.style, {
-        display: "flex",
-        alignItems: "center",
-        gap: "4px",
-        minWidth: "20px",
-        padding: "0 4px"
-    });
-    right.appendChild(tray);
-    _taskbar_tray_el = tray;
-
-    /* Clock — Windows-style: time on top, date below, both white, Segoe UI,
-       equal weight + size. Two-line stack, right-aligned. */
-    const clock = document.createElement("div");
-    Object.assign(clock.style, {
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "flex-end",
-        justifyContent: "center",
-        fontFamily: "'Segoe UI', 'Segoe UI Variable', 'Segoe UI Symbol', system-ui, sans-serif",
-        fontSize: "12px",
-        lineHeight: "1.25",
-        color: "#f0f0f0",
-        minWidth: "78px",
-        padding: "0 4px",
-        cursor: "default"
-    });
-    right.appendChild(clock);
-    _taskbar_clock_el = clock;
-
-    bar.appendChild(right);
-
-    document.body.appendChild(bar);
-    _taskbar_el = bar;
-}
-
-function _service_taskbar_start_clock() {
-
-    const tick = () => {
-        if (!_taskbar_clock_el) return;
-        const now = new Date();
-        const hh = String(now.getHours()).padStart(2, "0");
-        const mm = String(now.getMinutes()).padStart(2, "0");
-        const dd = String(now.getDate()).padStart(2, "0");
-        const mo = String(now.getMonth() + 1).padStart(2, "0");
-        const yy = now.getFullYear();
-        _taskbar_clock_el.innerHTML =
-            "<div>" + hh + ":" + mm + "</div>" +
-            "<div>" + dd + "-" + mo + "-" + yy + "</div>";
-    };
-
-    tick();
-    _taskbar_clock_timer = setInterval(tick, 15000);
-}
-
-/* ---- Start menu ---- */
-
-function _service_taskbar_build_start_menu() {
-
-    const menu = document.createElement("div");
-
-    Object.assign(menu.style, {
-        position: "fixed",
-        left: "0",
-        bottom: TASKBAR_HEIGHT + "px",
-        width: "320px",
-        height: "420px",
-        zIndex: "1000001",
-        background: "rgba(56, 60, 72, 0.65)",
-        backdropFilter: "blur(22px) saturate(170%) brightness(115%)",
-        webkitBackdropFilter: "blur(22px) saturate(170%) brightness(115%)",
-        border: "1px solid rgba(255,255,255,0.16)",
-        borderBottom: "none",
-        boxShadow: "0 -4px 24px rgba(0,0,0,0.45)",
-        display: "none",
-        flexDirection: "column",
-        color: "white",
-        fontFamily: "sans-serif",
-        fontSize: "13px"
-    });
-
-    /* Search row: input + arrow button (opens shell options menu). */
-    const searchWrap = document.createElement("div");
-    Object.assign(searchWrap.style, {
-        padding: "10px",
-        borderBottom: "1px solid rgba(255,255,255,0.08)",
-        display: "flex",
-        gap: "6px",
-        alignItems: "center"
-    });
-
-    const search = document.createElement("input");
-    search.type = "text";
-    search.placeholder = "Search apps…";
-    Object.assign(search.style, {
-        flex: "1",
-        boxSizing: "border-box",
-        background: "#15171c",
-        color: "white",
-        border: "1px solid #333",
-        borderRadius: "4px",
-        padding: "6px 8px",
-        fontSize: "13px",
-        outline: "none"
-    });
-    search.addEventListener("input", () => {
-        _service_taskbar_rebuild_start_list(search.value || "");
-    });
-    search.addEventListener("keydown", (e) => {
-        if (e.key === "Enter") {
-            /* Launch the first visible match. */
-            const first = _taskbar_start_list.querySelector("button[data-app-entry]");
-            if (first) first.click();
-        } else if (e.key === "Escape") {
-            _service_taskbar_close_start_menu();
-        }
-    });
-    searchWrap.appendChild(search);
-    _taskbar_start_search = search;
-
-    /* Arrow button — opens a ServiceMenu anchored at the last pointer
-       position. Currently hosts the "Hide desktop shell" toggle. */
-    const arrow = document.createElement("button");
-    arrow.title = "More options";
-    arrow.innerHTML =
-        "<svg width='12' height='12' viewBox='0 0 12 12' " +
-        "xmlns='http://www.w3.org/2000/svg' style='display:block'>" +
-            "<polyline points='4,2 8,6 4,10' fill='none' stroke='currentColor' " +
-            "stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/>" +
-        "</svg>";
-    Object.assign(arrow.style, {
-        background: "rgba(255,255,255,0.06)",
-        color: "#e6e6e6",
-        border: "1px solid rgba(255,255,255,0.12)",
-        borderRadius: "4px",
-        cursor: "pointer",
-        padding: "5px 7px",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        flexShrink: "0"
-    });
-    arrow.onmouseover = () => { arrow.style.background = "rgba(255,255,255,0.14)"; };
-    arrow.onmouseout  = () => { arrow.style.background = "rgba(255,255,255,0.06)"; };
-    arrow.onclick = (e) => {
-        e.stopPropagation();
-        _service_taskbar_open_options_menu();
-    };
-    searchWrap.appendChild(arrow);
-
-    menu.appendChild(searchWrap);
-
-    /* Scrollable apps list */
-    const list = document.createElement("div");
-    Object.assign(list.style, {
-        flex: "1",
-        overflowY: "auto",
-        padding: "6px 0"
-    });
-    menu.appendChild(list);
-    _taskbar_start_list = list;
-
-    document.body.appendChild(menu);
-    _taskbar_start_menu = menu;
-}
-
-function _service_taskbar_rebuild_start_list(filter) {
-
-    if (!_taskbar_start_list) return;
-
-    const f = (filter || "").toLowerCase().trim();
-    _taskbar_start_list.innerHTML = "";
-
-    const matches = _taskbar_apps.filter(a =>
-        !f || a.label.toLowerCase().includes(f)
-    );
-
-    if (matches.length === 0) {
-        const empty = document.createElement("div");
-        empty.textContent = "No apps found";
-        Object.assign(empty.style, {
-            padding: "12px",
-            color: "#888",
-            fontStyle: "italic"
-        });
-        _taskbar_start_list.appendChild(empty);
-        return;
-    }
-
-    matches.forEach(app => {
-        const entry = document.createElement("button");
-        entry.dataset.appEntry = "1";
-        if (app.title) entry.title = app.title;
-
-        Object.assign(entry.style, {
-            display: "flex",
-            alignItems: "center",
-            gap: "10px",
-            width: "100%",
-            textAlign: "left",
-            background: "transparent",
-            color: "white",
-            border: "none",
-            padding: "8px 14px",
-            cursor: "pointer",
-            fontSize: "13px",
-            fontFamily: "inherit"
-        });
-
-        /* Icon slot — fixed 22px square so labels align across rows whether
-           or not an icon was supplied. Falls back to the first character of
-           the label, styled like a tile, so registrations that didn't pass
-           an icon still get a consistent look. Emoji-friendly font stack
-           and a slightly larger font size since the typical icon is an
-           emoji glyph. */
-        const iconEl = document.createElement("span");
-        Object.assign(iconEl.style, {
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            width: "22px",
-            height: "22px",
-            flexShrink: "0",
-            fontSize: "16px",
-            lineHeight: "1",
-            color: "#cfd2d8",
-            fontFamily: "'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', system-ui, sans-serif"
-        });
-        if (app.icon) {
-            iconEl.innerHTML = app.icon;
-        } else {
-            iconEl.textContent = (app.label || "?").charAt(0);
-            iconEl.style.background = "rgba(255,255,255,0.10)";
-            iconEl.style.borderRadius = "4px";
-            iconEl.style.fontSize = "13px";
-            iconEl.style.fontWeight = "bold";
-        }
-        entry.appendChild(iconEl);
-
-        /* Text stack — primary label on top; if a `title` was supplied AND
-           it differs from the label, show it as a dim second line for
-           context (similar to Windows/KDE start-menu app summaries). */
-        const textWrap = document.createElement("span");
-        Object.assign(textWrap.style, {
-            display: "flex",
-            flexDirection: "column",
-            minWidth: "0",
-            flex: "1"
-        });
-
-        const primary = document.createElement("span");
-        primary.textContent = app.label;
-        Object.assign(primary.style, {
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis"
-        });
-        textWrap.appendChild(primary);
-
-        if (app.title && app.title !== app.label) {
-            const secondary = document.createElement("span");
-            secondary.textContent = app.title;
-            Object.assign(secondary.style, {
-                fontSize: "11px",
-                color: "#9aa0aa",
-                marginTop: "1px",
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis"
-            });
-            textWrap.appendChild(secondary);
-        }
-
-        entry.appendChild(textWrap);
-
-        entry.onmouseover = () => { entry.style.background = "rgba(255,255,255,0.08)"; };
-        entry.onmouseout  = () => { entry.style.background = "transparent"; };
-        entry.onclick = () => {
-            _service_taskbar_close_start_menu();
-            try { app.onlaunch(); }
-            catch (err) { console.error("taskbar launch threw:", err); }
-        };
-        _taskbar_start_list.appendChild(entry);
-    });
-}
-
-function _service_taskbar_toggle_start_menu() {
-    if (!_taskbar_start_menu) return;
-    if (_taskbar_start_menu.style.display === "none") {
-        _taskbar_start_menu.style.display = "flex";
-        /* Always paint above whatever window currently has focus.
-           ServiceWindow._zCounter is bumped on every focus, unbounded — so a
-           static z-index on the menu eventually loses. Sync past the live max
-           every time we open. */
-        if (typeof ServiceWindow !== "undefined" && ServiceWindow._zCounter) {
-            _taskbar_start_menu.style.zIndex = String(ServiceWindow._zCounter + 10);
-        }
-        _taskbar_start_search.value = "";
-        _service_taskbar_rebuild_start_list("");
-        setTimeout(() => _taskbar_start_search.focus(), 0);
-    } else {
-        _service_taskbar_close_start_menu();
-    }
-}
-
-function _service_taskbar_close_start_menu() {
-    if (_taskbar_start_menu) _taskbar_start_menu.style.display = "none";
-}
-
-/* Alt+X toggles the start menu. Alt+W closes the active window (the most
-   recently shown / mousedown'd ServiceWindow — see ServiceWindow._active).
-   Ctrl+1..9 launches the Nth visible system-tray app (left to right) by
-   simulating a click on its tray button — same path as a real user click,
-   so tray-mode windows toggle and ServiceWindow tray-anchoring still works.
-   Listener attached at capture phase on window so it fires regardless of
-   which textarea / button currently has focus. preventDefault +
-   stopPropagation prevent the page from also reacting to the chord. */
-function _service_taskbar_install_hotkey() {
-
-    window.addEventListener("keydown", (e) => {
-
-        /* Ctrl+1..9 — click the Nth visible tray app. Bare Ctrl only (no
-           Alt/Meta/Shift) so we don't collide with browser tab-switch
-           shortcuts that include other modifiers. */
-        if (e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
-            const n = parseInt(e.key, 10);
-            if (n >= 1 && n <= 9) {
-                if (!_taskbar_tray_el) return;
-                const buttons = Array.from(_taskbar_tray_el.children)
-                    .filter(b => b.offsetParent !== null);
-                const target = buttons[n - 1];
-                if (target) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    target.click();
-                }
-            }
-            return;
-        }
-
-        if (!e.altKey) return;
-        if (e.ctrlKey || e.metaKey || e.shiftKey) return;
-
-        const k = (e.key || "").toLowerCase();
-
-        if (k === "x") {
-            e.preventDefault();
-            e.stopPropagation();
-            _service_taskbar_toggle_start_menu();
-            return;
-        }
-
-        if (k === "w") {
-            const sw = (typeof ServiceWindow !== "undefined") && ServiceWindow.activeWindow();
-            if (sw) {
-                e.preventDefault();
-                e.stopPropagation();
-                /* Use the window's own close path — this routes through the
-                   default close handler, hide(), and persistState(), so the
-                   taskbar entry is removed and the system_restore session
-                   is updated correctly. */
-                sw.defaultClose();
-            }
-            return;
-        }
-    }, true);
-}
-
-/* ---- Open-windows tracking ---- */
-
-function _service_taskbar_patch_service_window() {
-
-    if (typeof ServiceWindow === "undefined") return;
-
-    const origShow = ServiceWindow.prototype.show;
-    const origHide = ServiceWindow.prototype.hide;
-    const origMin  = ServiceWindow.prototype.defaultMinimize;
-    const origMax  = ServiceWindow.prototype.defaultMaximize;
-
-    ServiceWindow.prototype.show = function () {
-        origShow.call(this);
-        _service_taskbar_on_show(this);
-    };
-
-    ServiceWindow.prototype.hide = function () {
-        origHide.call(this);
-        _service_taskbar_on_hide(this);
-    };
-
-    ServiceWindow.prototype.defaultMinimize = function () {
-        origMin.call(this);
-        _service_taskbar_update_button(this);
-    };
-
-    ServiceWindow.prototype.defaultMaximize = function () {
-        origMax.call(this);
-        _service_taskbar_update_button(this);
-    };
-}
-
-function _service_taskbar_find_entry(sw) {
-    return _taskbar_windows.find(w => w.sw === sw) || null;
-}
-
-function _service_taskbar_on_show(sw) {
-
-    if (!_taskbar_running_el) return;
-    /* Tray-hosted windows are represented by their tray icon, not by a
-       running-apps button — skip tracking. */
-    if (sw && sw._trayHandle) return;
-    if (_service_taskbar_find_entry(sw)) {
-        _service_taskbar_update_button(sw);
-        return;
-    }
-
-    /* Resolve a label and icon for the taskbar button. Both are looked up
-       by appName from the tray/Start-menu registries — apps register their
-       icon/title once and every running-apps button picks it up
-       automatically. So an editor window with appName="editor" shows up as
-       "Code Editor" with a 📝 glyph, not raw "editor". */
-    const label = service_taskbar_get_app_label(sw.appName);
-    const icon  = service_taskbar_get_app_icon(sw.appName);
-
-    const btn = document.createElement("button");
-    btn.title = label;
-
-    /* Glassy resting state. The outer + inner shadows give the pill a
-       slight inset, then the top highlight + bottom accent (set in
-       _update_button) read as a translucent Windows/KDE taskbar tile. */
-    const restBg   = "linear-gradient(180deg, rgba(255,255,255,0.10) 0%, rgba(255,255,255,0.04) 100%)";
-    const hoverBg  = "linear-gradient(180deg, rgba(255,255,255,0.18) 0%, rgba(255,255,255,0.08) 100%)";
-    const activeBg = "linear-gradient(180deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 100%)";
-
-    Object.assign(btn.style, {
-        display: "flex",
-        alignItems: "center",
-        gap: "8px",
-        background: restBg,
-        color: "#f0f0f0",
-        border: "1px solid rgba(255,255,255,0.14)",
-        borderRadius: "5px",
-        padding: "5px 12px",
-        height: "30px",
-        boxSizing: "border-box",
-        cursor: "pointer",
-        fontSize: "12px",
-        fontFamily: "inherit",
-        maxWidth: "210px",
-        flexShrink: "0",
-        boxShadow:
-            "inset 0 1px 0 rgba(255,255,255,0.10)," +
-            "0 1px 2px rgba(0,0,0,0.25)",
-        transition: "background 120ms ease, transform 80ms ease, box-shadow 120ms ease"
-    });
-
-    btn._restBg   = restBg;
-    btn._hoverBg  = hoverBg;
-    btn._activeBg = activeBg;
-
-    btn.onmouseover = () => { btn.style.background = hoverBg; };
-    btn.onmouseout  = () => { btn.style.background = btn._currentBg || restBg; };
-    btn.onmousedown = () => {
-        btn.style.background = activeBg;
-        btn.style.transform  = "translateY(1px)";
-        btn.style.boxShadow  = "inset 0 1px 2px rgba(0,0,0,0.35)";
-    };
-    btn.onmouseup   = () => {
-        btn.style.transform = "none";
-        btn.style.boxShadow =
-            "inset 0 1px 0 rgba(255,255,255,0.10)," +
-            "0 1px 2px rgba(0,0,0,0.25)";
-    };
-
-    /* Icon slot — fixed 16px so labels line up across rows. Emoji-friendly
-       font stack so emoji glyphs render at full size; SVG strings render
-       via innerHTML. Tile fallback (first letter) keeps alignment when no
-       icon was supplied. */
-    const iconEl = document.createElement("span");
-    Object.assign(iconEl.style, {
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        width: "16px",
-        height: "16px",
-        flexShrink: "0",
-        fontSize: "14px",
-        lineHeight: "1",
-        color: "#e6e8ee",
-        fontFamily: "'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', system-ui, sans-serif"
-    });
-    if (icon) {
-        iconEl.innerHTML = icon;
-    } else {
-        iconEl.textContent = (label || "?").charAt(0).toUpperCase();
-        iconEl.style.background = "rgba(255,255,255,0.16)";
-        iconEl.style.borderRadius = "3px";
-        iconEl.style.fontSize = "10px";
-        iconEl.style.fontWeight = "bold";
-    }
-    btn.appendChild(iconEl);
-
-    const labelEl = document.createElement("span");
-    labelEl.textContent = label;
-    Object.assign(labelEl.style, {
-        whiteSpace: "nowrap",
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        minWidth: "0",
-        fontWeight: "500",
-        letterSpacing: "0.1px"
-    });
-    btn.appendChild(labelEl);
-
-    btn.onclick = () => {
-        if (!sw.visible) {
-            sw.show();
-            return;
-        }
-        if (sw.mode === "minimized") {
-            service_taskbar_restore_window(sw);
-        } else {
-            service_taskbar_minimize_window(sw);
-        }
-    };
-
-    _taskbar_running_el.appendChild(btn);
-    _taskbar_windows.push({ sw, btn });
-    _service_taskbar_update_button(sw);
-}
-
-function _service_taskbar_on_hide(sw) {
-
-    const entry = _service_taskbar_find_entry(sw);
-    if (!entry) return;
-
-    if (entry.btn.parentElement) entry.btn.parentElement.removeChild(entry.btn);
-    const idx = _taskbar_windows.indexOf(entry);
-    if (idx >= 0) _taskbar_windows.splice(idx, 1);
-}
-
-function _service_taskbar_update_button(sw) {
-
-    const entry = _service_taskbar_find_entry(sw);
-    if (!entry) return;
-
-    const btn = entry.btn;
-    const restBg  = btn._restBg  || "rgba(255,255,255,0.08)";
-    const hoverBg = btn._hoverBg || "rgba(255,255,255,0.18)";
-
-    if (sw.mode === "minimized") {
-        /* Dim + no accent — clearly "parked". */
-        btn._currentBg = restBg;
-        btn.style.background = restBg;
-        btn.style.color = "#9aa0aa";
-        btn.style.opacity = "0.75";
-        btn.style.borderBottom = "1px solid rgba(255,255,255,0.14)";
-        btn.style.boxShadow =
-            "inset 0 1px 0 rgba(255,255,255,0.08)," +
-            "0 1px 2px rgba(0,0,0,0.20)";
-    } else {
-        /* Active: brighter fill + crisp 2px cyan accent at the bottom edge.
-           Cache the brighter fill as the "current" background so onmouseout
-           reverts to it (not the dim resting state). */
-        btn._currentBg = hoverBg;
-        btn.style.background = hoverBg;
-        btn.style.color = "white";
-        btn.style.opacity = "1";
-        btn.style.borderBottom = "2px solid #4fc3f7";
-        btn.style.boxShadow =
-            "inset 0 1px 0 rgba(255,255,255,0.18)," +
-            "0 2px 6px rgba(0,0,0,0.30)," +
-            "0 0 0 1px rgba(79,195,247,0.18)";
-    }
-}
-
-/* ---- System tray icons ----
-   Components register a tray icon via service_taskbar_register_tray_icon.
-   Returns a handle so the caller can remove the icon when its window
-   closes. The button's onClick receives the button DOM node so the caller
-   can compute the popup anchor (e.g. ServiceWindow tray-mode positions
-   itself just above this button). */
-
-function service_taskbar_register_tray_icon(opts) {
-
-    service_taskbar_init();
-    if (!_taskbar_tray_el) return null;
-
-    const btn = document.createElement("button");
-    /* Accept either inline HTML (e.g. an SVG) or a plain text/emoji glyph
-       — innerHTML handles both. Falls back to "?" when no icon is given. */
-    btn.innerHTML = opts.icon || "?";
-    if (opts.title) btn.title = opts.title;
-
-    Object.assign(btn.style, {
-        background: "transparent",
-        color: "#e6e6e6",
-        border: "1px solid transparent",
-        borderRadius: "3px",
-        cursor: "pointer",
-        padding: "2px 7px",
-        /* 15px so emoji icons (the typical case) read clearly. Plain
-           text glyphs at this size still look correct on a 26px button. */
-        fontSize: "15px",
-        fontWeight: "normal",
-        fontFamily: "'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', system-ui, sans-serif",
-        lineHeight: "1",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        minWidth: "22px",
-        height: "26px"
-    });
-
-    btn.onmouseover = () => { btn.style.background = "rgba(255,255,255,0.10)"; };
-    btn.onmouseout  = () => { btn.style.background = "transparent"; };
-    btn.onclick = (e) => {
-        e.stopPropagation();
-        if (opts.onClick) opts.onClick(btn);
-    };
-
-    _taskbar_tray_el.appendChild(btn);
-
-    return {
-        button: btn,
-        remove() {
-            if (btn.parentElement) btn.parentElement.removeChild(btn);
-        }
-    };
-}
-
-/* ---- Tray app registry ----
-   Higher-level than service_taskbar_register_tray_icon. Apps register once;
-   the registry manages whether the icon is currently in the tray (controlled
-   by the user via the up-arrow overflow popup) and persists that preference
-   across reloads.
-
-   Each registration:
-     opts.appName     — REQUIRED. Stable id used as the persistence key.
-     opts.label       — Human-readable name shown in the overflow popup.
-     opts.icon        — Tray glyph (e.g. "C").
-     opts.title       — Tooltip on the tray button.
-     opts.onClick     — (btn) => void. Called when the tray icon is clicked.
-                        Receives the button DOM node (caller uses it for
-                        ServiceWindow tray-mode anchoring). When the user
-                        re-shows a hidden app, a new button is created and
-                        passed to a fresh onClick — apps that need this can
-                        re-adopt via ServiceWindow._adoptTrayButton.
-     opts.onAdopt     — Optional. (btn) => void called every time a fresh
-                        button is created (initial registration AND each
-                        unhide). Use this to rewire the click handler on
-                        the new DOM node. */
-
-const TRAY_HIDDEN_KEY = "tm_tray_hidden_apps";
-
-let _tray_apps = [];   // [{ appName, label, icon, title, onClick, onAdopt, handle }]
-
-function _service_taskbar_load_hidden() {
-    try {
-        const raw = localStorage.getItem(TRAY_HIDDEN_KEY);
-        if (!raw) return [];
-        const arr = JSON.parse(raw);
-        return Array.isArray(arr) ? arr : [];
-    } catch (e) { return []; }
-}
-
-function _service_taskbar_save_hidden(arr) {
-    try { localStorage.setItem(TRAY_HIDDEN_KEY, JSON.stringify(arr)); }
-    catch (e) {}
-}
-
-function _service_taskbar_is_app_hidden(appName) {
-    return _service_taskbar_load_hidden().indexOf(appName) >= 0;
-}
-
-function _service_taskbar_set_app_hidden(appName, hidden) {
-    let arr = _service_taskbar_load_hidden();
-    const idx = arr.indexOf(appName);
-    if (hidden && idx < 0) arr.push(appName);
-    if (!hidden && idx >= 0) arr.splice(idx, 1);
-    _service_taskbar_save_hidden(arr);
-}
-
-function service_taskbar_register_tray_app(opts) {
-
-    service_taskbar_init();
-
-    const app = {
-        appName: opts.appName,
-        label:   opts.label || opts.appName,
-        icon:    opts.icon  || (opts.appName || "?").charAt(0).toUpperCase(),
-        title:   opts.title || opts.label || opts.appName,
-        onClick: opts.onClick,
-        onAdopt: opts.onAdopt,
-        handle:  null
-    };
-    _tray_apps.push(app);
-
-    if (!_service_taskbar_is_app_hidden(app.appName)) {
-        _service_taskbar_show_app(app);
-    }
-
-    return {
-        /* Programmatic show/hide — same path as the user's overflow toggle. */
-        setVisible(on) {
-            _service_taskbar_set_app_visibility(app.appName, on);
-        }
-    };
-}
-
-function _service_taskbar_show_app(app) {
-    if (app.handle) return;   // already shown
-    app.handle = service_taskbar_register_tray_icon({
-        icon:  app.icon,
-        title: app.title,
-        onClick: (btn) => {
-            if (app.onClick) app.onClick(btn);
-        }
-    });
-    if (app.handle && app.onAdopt) {
-        try { app.onAdopt(app.handle.button); } catch (e) { console.error(e); }
-    }
-}
-
-function _service_taskbar_hide_app(app) {
-    if (!app.handle) return;
-    app.handle.remove();
-    app.handle = null;
-}
-
-function _service_taskbar_set_app_visibility(appName, on) {
-    const app = _tray_apps.find(a => a.appName === appName);
-    if (!app) return;
-    _service_taskbar_set_app_hidden(appName, !on);
-    if (on) _service_taskbar_show_app(app);
-    else    _service_taskbar_hide_app(app);
-}
-
-/* Look up the live tray button for an app, if currently visible.
-   Returns null if the app isn't registered or is hidden. Used by
-   component_*_create paths that want to wire the ServiceWindow against
-   whatever button currently exists. */
-function service_taskbar_get_tray_button(appName) {
-    const app = _tray_apps.find(a => a.appName === appName);
-    if (!app || !app.handle) return null;
-    return app.handle.button;
-}
-
-/* Read-only snapshot of the registered tray apps. Used by
-   framework_orphan_cleanup to detect stale entries in the
-   tm_tray_hidden_apps list. Returns shallow clones — callers must not
-   mutate live registry state. */
-function service_taskbar_list_tray_apps() {
-    return _tray_apps.map(a => ({
-        appName: a.appName,
-        label:   a.label,
-        icon:    a.icon
-    }));
-}
-
-/* ---- Tray overflow popup ----
-   Opened by clicking the up-arrow in the right-side cluster. Lists every
-   registered tray app with: name, a Launch button, and a Show-in-tray
-   toggle. A search box at the top filters the list by label. The popup
-   styling mirrors ServiceMenu (glass panel) so it feels consistent. */
-
-let _tray_overflow_popup = null;
-
-function _service_taskbar_close_tray_overflow() {
-    if (_tray_overflow_popup) {
-        if (_tray_overflow_popup._cleanup) _tray_overflow_popup._cleanup();
-        if (_tray_overflow_popup.parentNode) {
-            _tray_overflow_popup.parentNode.removeChild(_tray_overflow_popup);
-        }
-        _tray_overflow_popup = null;
-    }
-}
-
-function _service_taskbar_open_tray_overflow(anchorBtn) {
-
-    _service_taskbar_close_tray_overflow();
-
-    const popup = document.createElement("div");
-    Object.assign(popup.style, {
-        position: "fixed",
-        width: "300px",
-        maxHeight: "360px",
-        zIndex: "1000010",
-        background: "rgba(28, 30, 36, 0.78)",
-        backdropFilter: "blur(22px) saturate(160%)",
-        webkitBackdropFilter: "blur(22px) saturate(160%)",
-        border: "1px solid rgba(255,255,255,0.12)",
-        borderRadius: "6px",
-        boxShadow: "0 8px 28px rgba(0,0,0,0.55)",
-        color: "white",
-        fontFamily: "'Segoe UI', system-ui, sans-serif",
-        fontSize: "13px",
-        userSelect: "none",
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden"
-    });
-
-    /* Search box */
-    const searchWrap = document.createElement("div");
-    Object.assign(searchWrap.style, {
-        padding: "8px",
-        borderBottom: "1px solid rgba(255,255,255,0.08)"
-    });
-    const search = document.createElement("input");
-    search.type = "text";
-    search.placeholder = "Search tray apps…";
-    Object.assign(search.style, {
-        width: "100%",
-        boxSizing: "border-box",
-        background: "#15171c",
-        color: "white",
-        border: "1px solid #333",
-        borderRadius: "4px",
-        padding: "6px 8px",
-        fontSize: "13px",
-        fontFamily: "inherit",
-        outline: "none"
-    });
-    searchWrap.appendChild(search);
-    popup.appendChild(searchWrap);
-
-    /* Scrollable list */
-    const list = document.createElement("div");
-    Object.assign(list.style, {
-        flex: "1",
-        overflowY: "auto",
-        padding: "4px 0"
-    });
-    popup.appendChild(list);
-
-    const rebuild = () => {
-        const f = (search.value || "").toLowerCase().trim();
-        list.innerHTML = "";
-
-        const matches = _tray_apps.filter(a =>
-            !f || (a.label || "").toLowerCase().includes(f)
-        );
-
-        if (matches.length === 0) {
-            const empty = document.createElement("div");
-            empty.textContent = _tray_apps.length === 0
-                ? "No tray apps registered"
-                : "No matches";
-            Object.assign(empty.style, {
-                padding: "12px 14px",
-                color: "#888",
-                fontStyle: "italic"
-            });
-            list.appendChild(empty);
-            return;
-        }
-
-        for (const app of matches) {
-            const row = document.createElement("div");
-            Object.assign(row.style, {
-                display: "flex",
-                alignItems: "center",
-                gap: "8px",
-                padding: "6px 10px"
-            });
-
-            const labelEl = document.createElement("span");
-            labelEl.textContent = app.label;
-            Object.assign(labelEl.style, {
-                flex: "1",
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis"
-            });
-            row.appendChild(labelEl);
-
-            const launchBtn = document.createElement("button");
-            launchBtn.textContent = "Launch";
-            Object.assign(launchBtn.style, {
-                background: "#4fc3f7",
-                color: "#000",
-                border: "none",
-                borderRadius: "3px",
-                padding: "3px 10px",
-                cursor: "pointer",
-                fontSize: "12px",
-                fontWeight: "bold",
-                fontFamily: "inherit",
-                flexShrink: "0"
-            });
-            launchBtn.onclick = () => {
-                /* If hidden, temporarily ensure the icon exists so onClick
-                   has a button to anchor against. We don't permanently
-                   re-show it — the toggle controls that. Instead we pass
-                   the up-arrow as the anchor when hidden. */
-                if (app.handle && app.handle.button) {
-                    app.onClick(app.handle.button);
-                } else {
-                    app.onClick(anchorBtn);
-                }
-                _service_taskbar_close_tray_overflow();
-            };
-            row.appendChild(launchBtn);
-
-            /* Show-in-tray toggle */
-            const visible = !_service_taskbar_is_app_hidden(app.appName);
-            const sw = _service_menu_make_switch(visible);
-            sw.el.style.cursor = "pointer";
-            sw.el.title = "Show in tray";
-            sw.el.addEventListener("click", () => {
-                const next = _service_taskbar_is_app_hidden(app.appName);  // toggle: hidden -> visible
-                _service_taskbar_set_app_visibility(app.appName, next);
-                sw.set(next);
-            });
-            row.appendChild(sw.el);
-
-            list.appendChild(row);
-        }
-    };
-
-    search.addEventListener("input", rebuild);
-    search.addEventListener("keydown", (e) => {
-        if (e.key === "Escape") _service_taskbar_close_tray_overflow();
-    });
-
-    rebuild();
-
-    document.body.appendChild(popup);
-    _tray_overflow_popup = popup;
-
-    /* Anchor: above the up-arrow, right-aligned to its right edge. */
-    requestAnimationFrame(() => {
-        const r = anchorBtn.getBoundingClientRect();
-        const pr = popup.getBoundingClientRect();
-        let left = Math.round(r.right - pr.width);
-        let top  = Math.round(r.top - pr.height - 8);
-        left = Math.max(8, Math.min(left, window.innerWidth - pr.width - 8));
-        top  = Math.max(8, top);
-        popup.style.left = left + "px";
-        popup.style.top  = top  + "px";
-        setTimeout(() => search.focus(), 0);
-    });
-
-    /* Outside click / Escape close */
-    const onDown = (e) => {
-        if (popup.contains(e.target)) return;
-        if (anchorBtn.contains(e.target)) return;
-        _service_taskbar_close_tray_overflow();
-    };
-    const onKey = (e) => {
-        if (e.key === "Escape") _service_taskbar_close_tray_overflow();
-    };
-    setTimeout(() => {
-        document.addEventListener("mousedown", onDown, true);
-        document.addEventListener("keydown",   onKey,  true);
-    }, 0);
-    popup._cleanup = () => {
-        document.removeEventListener("mousedown", onDown, true);
-        document.removeEventListener("keydown",   onKey,  true);
-    };
-}
-
-function service_taskbar_minimize_window(sw) {
-    if (!sw) return;
-    if (sw.mode !== "minimized") sw.defaultMinimize();
-}
-
-function service_taskbar_restore_window(sw) {
-    if (!sw) return;
-    if (!sw.visible) sw.show();
-    if (sw.mode === "minimized") sw.defaultMinimize();   // toggles back to normal
-}
-
-/* ---- Shell visibility ----
-   "Hide" the kdeubuntu shell means: take down the wallpaper and taskbar (and
-   close any open start menu / options menu), then drop a small floating
-   restore button at the bottom-right corner — same general anchor the simple
-   stacked launcher buttons used to live in. Clicking it brings the shell
-   back. State is kept in localStorage so the user's choice survives a reload. */
-
-const TASKBAR_HIDDEN_KEY = "tm_taskbar_shell_hidden";
-
-let _taskbar_restore_btn  = null;
-let _taskbar_options_menu = null;
-
-function _service_taskbar_open_options_menu() {
-
-    /* Anchor the popup at the last pointer position so it appears under the
-       user's mouse / touch (the requested behaviour). The menu also clamps
-       itself to the viewport, so anchoring at the arrow when the user
-       arrived via Alt+X (no recent click on the arrow) still works. */
-    const p = service_menu_last_pointer();
-
-    if (_taskbar_options_menu) _taskbar_options_menu.close();
-    _taskbar_options_menu = new ServiceMenu();
-
-    _taskbar_options_menu
-        .addToggle({
-            label: "Hide desktop shell",
-            getter: () => _service_taskbar_is_hidden(),
-            setter: (on) => {
-                if (on) _service_taskbar_hide_shell();
-                else    _service_taskbar_show_shell();
-            }
-        })
-        .openAt(p.x, p.y);
-}
-
-function _service_taskbar_is_hidden() {
-    try { return localStorage.getItem(TASKBAR_HIDDEN_KEY) === "true"; }
-    catch (e) { return false; }
-}
-
-function _service_taskbar_set_hidden(flag) {
-    try { localStorage.setItem(TASKBAR_HIDDEN_KEY, flag ? "true" : "false"); }
-    catch (e) {}
-}
-
-function _service_taskbar_hide_shell() {
-
-    _service_taskbar_close_start_menu();
-
-    if (_taskbar_wallpaper_el) _taskbar_wallpaper_el.style.display = "none";
-    if (_taskbar_el)           _taskbar_el.style.display           = "none";
-
-    _service_taskbar_set_hidden(true);
-    _service_taskbar_show_restore_btn();
-}
-
-function _service_taskbar_show_shell() {
-
-    if (_taskbar_wallpaper_el) _taskbar_wallpaper_el.style.display = "block";
-    if (_taskbar_el)           _taskbar_el.style.display           = "flex";
-
-    _service_taskbar_set_hidden(false);
-    _service_taskbar_hide_restore_btn();
-}
-
-/* Floating restore button, bottom-right. Mirrors the simple-launcher anchor
-   on the opposite corner so it doesn't visually clash with whatever the
-   user is doing. */
-function _service_taskbar_show_restore_btn() {
-
-    if (_taskbar_restore_btn) {
-        _taskbar_restore_btn.style.display = "flex";
-        return;
-    }
-
-    const btn = document.createElement("button");
-    btn.title = "Show desktop shell";
-    btn.innerHTML =
-        "<svg width='16' height='16' viewBox='0 0 24 24' " +
-        "xmlns='http://www.w3.org/2000/svg'>" +
-            "<rect x='2'  y='2'  width='9' height='9' fill='#ffffff'/>" +
-            "<rect x='13' y='2'  width='9' height='9' fill='#f0f0f0'/>" +
-            "<rect x='2'  y='13' width='9' height='9' fill='#d8d8d8'/>" +
-            "<rect x='13' y='13' width='9' height='9' fill='#b8b8b8'/>" +
-        "</svg>";
-    Object.assign(btn.style, {
-        position: "fixed",
-        right: "12px",
-        bottom: "12px",
-        zIndex: "1000005",
-        width: "32px",
-        height: "32px",
-        background: "#1976d2",
-        color: "white",
-        border: "1px solid rgba(255,255,255,0.2)",
-        borderRadius: "6px",
-        cursor: "pointer",
-        boxShadow: "0 4px 14px rgba(0,0,0,0.4)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center"
-    });
-    btn.onmouseover = () => { btn.style.background = "#2196f3"; };
-    btn.onmouseout  = () => { btn.style.background = "#1976d2"; };
-    btn.onclick = () => {
-        _service_taskbar_show_shell();
-    };
-
-    document.body.appendChild(btn);
-    _taskbar_restore_btn = btn;
-}
-
-function _service_taskbar_hide_restore_btn() {
-    if (_taskbar_restore_btn) _taskbar_restore_btn.style.display = "none";
-}
-
 // ===== src/service_toast.js =====
 // -----------------------------------------------------------------------------
 // service_toast.js — Android-style notification toasts + history pane.
@@ -5640,7 +7096,7 @@ function _service_taskbar_hide_restore_btn() {
 // right-side pane listing past toasts.
 //
 // Init: service_toast_handle_init() must be called from framework_on_init()
-// (after service_taskbar_init has built the clock element). It attaches the
+// (after framework_taskbar_init has built the clock element). It attaches the
 // clock click handler and pre-creates the history pane (hidden).
 // -----------------------------------------------------------------------------
 
@@ -6266,7 +7722,7 @@ function service_toast_handle_init() {
     _service_toast_inject_styles();
 
     /* Make the taskbar clock a click target. _taskbar_clock_el is in the
-       same IIFE (service_taskbar.js). Guard for the case where the shell
+       same IIFE (framework_taskbar.js). Guard for the case where the shell
        hasn't built yet. */
     if (typeof _taskbar_clock_el !== "undefined" && _taskbar_clock_el) {
         _taskbar_clock_el.style.cursor = "pointer";
@@ -6409,6 +7865,7 @@ class ServiceWindow {
         this._tabs           = [];   // [{ id, button }]
         this._activeTabId    = null;
         this._lastActiveAt   = 0;    // timestamp set on each _markActive call
+        this._shell          = null; // shell object for programmatic API
     }
 
     /* Build container + header + min/max/close + drag wiring + resize handle.
@@ -6437,6 +7894,7 @@ class ServiceWindow {
             throw new Error("ServiceWindow.create: opts.appName is required");
         }
         this.appName = opts.appName;
+        this._shell  = opts.shell || null;
 
         const width  = opts.width  || 500;
         const height = opts.height || 350;
@@ -6592,7 +8050,7 @@ class ServiceWindow {
 
     _installTrayMode(opts) {
 
-        const handle = service_taskbar_register_tray_icon({
+        const handle = framework_taskbar_register_tray_icon({
             icon:    opts.icon,
             title:   opts.title,
             onClick: (btn) => this._toggleFromTray(btn)
@@ -6719,6 +8177,16 @@ class ServiceWindow {
     /* Snap the window above the tray button and show it. Always re-snaps
        (per user's choice) — any drag is forgotten on next tray click. */
     _toggleFromTray(btn) {
+
+        /* Hide every OTHER visible tray-mode window first. With mouse clicks
+           the outside-click handler takes care of this, but keyboard shortcuts
+           (Ctrl+1..9) don't fire mousedown so we must do it explicitly. */
+        for (const sw of ServiceWindow._instances) {
+            if (sw === this) continue;
+            if (sw._trayAdopted && sw.visible && sw.mode !== "minimized") {
+                sw.hide();
+            }
+        }
 
         if (this.visible && this.mode !== "minimized") {
             this.hide();
@@ -7151,6 +8619,12 @@ class ServiceWindow {
     persistState() {
         if (!this.appName || !this.container) return;
         const key = ServiceWindow._stateKey(this.appName);
+
+        /* Tray-mode windows snap above the tray icon on every show, so
+           persisting geometry is pointless. They also should not auto-restore
+           on page load, so skip the visible flag entirely. */
+        if (this._trayAdopted) return;
+
         const state = {
             left:           this.container.style.left,
             top:            this.container.style.top,
@@ -7169,6 +8643,8 @@ class ServiceWindow {
        based on state.visible (typically driven by framework_system_restore). */
     restoreState() {
         if (!this.appName || !this.container) return null;
+        if (this._trayAdopted) return null;
+
         const key = ServiceWindow._stateKey(this.appName);
         let state;
         try {
@@ -7204,6 +8680,52 @@ class ServiceWindow {
        min/max/close cluster ends up at the right edge of the header. */
     appendControls() {
         this.headerEl.appendChild(this._controlsEl);
+        if (this._shell) this._buildShellAPI();
+    }
+
+    /* Re-scan [data-shell] elements and rebuild the shell namespace.
+       Call after dynamically adding new data-shell elements. */
+    refreshShellAPI() {
+        if (this._shell) this._buildShellAPI();
+    }
+
+    /* Walk this.container for [data-shell] elements and generate
+       getter/setter/action methods on shell.<appName>. */
+    _buildShellAPI() {
+        const self = this;
+        const ns = {};
+
+        /* Utility: "operand1" → "Operand1" for method name suffixes */
+        function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+
+        this.container.querySelectorAll("[data-shell]").forEach(function (el) {
+            const name = el.dataset.shell;
+            const tag  = el.tagName.toLowerCase();
+            const type = (el.type || "").toLowerCase();
+
+            if (tag === "input" && type === "checkbox") {
+                ns["is" + cap(name)]  = function ()  { return el.checked; };
+                ns["set" + cap(name)] = function (v) { el.checked = !!v; };
+            } else if (tag === "input" || tag === "textarea") {
+                ns["get" + cap(name)] = function ()  { return el.value; };
+                ns["set" + cap(name)] = function (v) { el.value = v; };
+            } else if (tag === "select") {
+                ns["get" + cap(name)] = function ()  { return el.value; };
+                ns["set" + cap(name)] = function (v) { el.value = v; };
+            } else if (tag === "button") {
+                ns["click" + cap(name)] = function () { el.click(); };
+            } else {
+                /* div, span, label, or any other element — read-only text */
+                ns["get" + cap(name)] = function () { return el.textContent; };
+            }
+        });
+
+        /* Window-level helpers */
+        ns.show      = function () { self.show(); };
+        ns.hide      = function () { self.hide(); };
+        ns.isVisible = function () { return self.visible; };
+
+        this._shell[this.appName] = ns;
     }
 
     /* Create a body <div> below the header, append it to the container,
@@ -7241,11 +8763,13 @@ class ServiceWindow {
     }
 
     /* Create a styled label <div>. Caller updates .textContent later to
-       reflect dynamic state. */
-    createLabel(text) {
+       reflect dynamic state.
+       shellName — optional data-shell key for the shell API. */
+    createLabel(text, shellName) {
 
         const el = document.createElement("div");
         el.textContent = text || "";
+        if (shellName) el.dataset.shell = shellName;
 
         Object.assign(el.style, {
             marginTop: "4px",
@@ -7257,12 +8781,14 @@ class ServiceWindow {
     }
 
     /* Create a styled <input type="text"> textbox. Caller sets .type /
-       .value / .onchange / extra attributes after construction. */
-    createTextbox(placeholder) {
+       .value / .onchange / extra attributes after construction.
+       shellName — optional data-shell key for the shell API. */
+    createTextbox(placeholder, shellName) {
 
         const input = document.createElement("input");
         input.type = "text";
         if (placeholder) input.placeholder = placeholder;
+        if (shellName) input.dataset.shell = shellName;
 
         Object.assign(input.style, {
             background: "#2a2a2a",
@@ -7279,11 +8805,13 @@ class ServiceWindow {
     }
 
     /* Create a primary action button (filled, accent-coloured). Caller wires
-       .onclick / .title / extra styles after construction. */
-    createPrimaryButton(label) {
+       .onclick / .title / extra styles after construction.
+       shellName — optional data-shell key for the shell API. */
+    createPrimaryButton(label, shellName) {
 
         const btn = document.createElement("button");
         btn.textContent = label || "OK";
+        if (shellName) btn.dataset.shell = shellName;
 
         Object.assign(btn.style, {
             background: "#4fc3f7",
@@ -7296,6 +8824,66 @@ class ServiceWindow {
         });
 
         return btn;
+    }
+
+    /* Create a checkbox wrapper: <div> containing <input type="checkbox"> +
+       <span> label. The checkbox input is stored as wrapper.checkbox for
+       programmatic access.
+       shellName — optional data-shell key for the shell API. */
+    createCheckbox(label, shellName) {
+
+        const wrapper = document.createElement("div");
+        Object.assign(wrapper.style, {
+            display: "flex",
+            alignItems: "center",
+            gap: "6px"
+        });
+
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        if (shellName) cb.dataset.shell = shellName;
+
+        const span = document.createElement("span");
+        span.textContent = label || "";
+        Object.assign(span.style, { color: "#ddd", fontSize: "13px" });
+
+        wrapper.appendChild(cb);
+        wrapper.appendChild(span);
+        wrapper.checkbox = cb;
+
+        return wrapper;
+    }
+
+    /* Create a styled <select> element. `options` is an array of
+       {value, label} objects or plain strings.
+       shellName — optional data-shell key for the shell API. */
+    createSelect(options, shellName) {
+
+        const sel = document.createElement("select");
+        if (shellName) sel.dataset.shell = shellName;
+
+        (options || []).forEach(function (opt) {
+            const o = document.createElement("option");
+            if (typeof opt === "string") {
+                o.value = opt;
+                o.textContent = opt;
+            } else {
+                o.value = opt.value;
+                o.textContent = opt.label || opt.value;
+            }
+            sel.appendChild(o);
+        });
+
+        Object.assign(sel.style, {
+            background: "#2a2a2a",
+            color: "white",
+            border: "1px solid #444",
+            borderRadius: "4px",
+            padding: "4px 6px",
+            fontSize: "13px"
+        });
+
+        return sel;
     }
 
     /* Register a tab. Adds a styled button to .tabBarEl that, when clicked,
@@ -7557,6 +9145,47 @@ function service_window_restore_geometry(key, element) {
     element.style.height = state.height;
 
     return state;
+}
+
+// ===== src/shell_toast.js =====
+// -----------------------------------------------------------------------------
+// shell_toast.js — window.shell.shelltoast facade for service_toast.
+//
+// Exposes a small, AI-friendly subset of service_toast.js on window.shell so
+// scripts (and LLM-generated snippets pasted into the console) can fire
+// notifications without having to know the internal function names.
+//
+// Public surface (window.shell.shelltoast.*):
+//   showToastSimple(message)          — fire a default 3s toast.
+//   showToast(message, opts)          — full options: { duration, title, icon }.
+//                                       Returns { dismiss } so callers can
+//                                       early-dismiss.
+//   clearHistory()                    — wipe the notifications history pane.
+//
+// Intentionally OMITTED (kept off the AI surface to avoid side-quests):
+//   - location getters/setters: the user picks the on-screen anchor from the
+//     notifications pane; programmatic override would just confuse callers.
+//   - history pane open/close toggles: that's a UI concern, not a scripting
+//     concern.
+//
+// Wired up in framework_shell.js (shelltoast: shell_toast_build()).
+// -----------------------------------------------------------------------------
+
+function shell_toast_build() {
+    return {
+        showToastSimple(message) {
+            return service_toast_show(String(message == null ? "" : message));
+        },
+        showToast(message, opts) {
+            return service_toast_show(
+                String(message == null ? "" : message),
+                opts || {}
+            );
+        },
+        clearHistory() {
+            service_toast_clear_history();
+        }
+    };
 }
 
 // ===== src/footer.js =====

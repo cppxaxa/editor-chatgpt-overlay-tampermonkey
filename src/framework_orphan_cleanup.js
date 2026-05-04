@@ -14,9 +14,9 @@
 //   - "tm_window_<appName>" geometry blobs whose appName is not in
 //     ServiceWindow._apps.
 //   - "tm_tray_hidden_apps" entries whose appName is not in the tray-app
-//     registry. Tray apps register through service_taskbar_register_tray_app,
+//     registry. Tray apps register through framework_taskbar_register_tray_app,
 //     which keeps an internal _tray_apps list — we expose
-//     service_taskbar_list_tray_apps() so this file doesn't need to reach
+//     framework_taskbar_list_tray_apps() so this file doesn't need to reach
 //     into private state.
 //
 // What we DO NOT sweep:
@@ -60,7 +60,7 @@ function framework_orphan_cleanup() {
     let removedTray = 0;
     try {
         const liveTrayNames = new Set(
-            service_taskbar_list_tray_apps().map(a => a.appName)
+            framework_taskbar_list_tray_apps().map(a => a.appName)
         );
         const raw = localStorage.getItem("tm_tray_hidden_apps");
         if (raw) {

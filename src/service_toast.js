@@ -30,7 +30,7 @@
 // right-side pane listing past toasts.
 //
 // Init: service_toast_handle_init() must be called from framework_on_init()
-// (after service_taskbar_init has built the clock element). It attaches the
+// (after framework_taskbar_init has built the clock element). It attaches the
 // clock click handler and pre-creates the history pane (hidden).
 // -----------------------------------------------------------------------------
 
@@ -656,7 +656,7 @@ function service_toast_handle_init() {
     _service_toast_inject_styles();
 
     /* Make the taskbar clock a click target. _taskbar_clock_el is in the
-       same IIFE (service_taskbar.js). Guard for the case where the shell
+       same IIFE (framework_taskbar.js). Guard for the case where the shell
        hasn't built yet. */
     if (typeof _taskbar_clock_el !== "undefined" && _taskbar_clock_el) {
         _taskbar_clock_el.style.cursor = "pointer";

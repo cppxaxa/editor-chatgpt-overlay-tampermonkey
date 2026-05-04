@@ -24,6 +24,7 @@ function component_localstorage_create() {
         appName:  "localstorage",
         width:  700,
         height: 500,
+        shell:  shell,
         isDraggable: () => true,
         isResizable: () => true,
         minWidth: 400,

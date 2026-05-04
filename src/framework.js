@@ -14,8 +14,11 @@ function framework_register_launcher() {
         icon:    "📝",
         title:   "Code Editor"
     });
-    /* Calc lives in the system tray (registered in component_calc_handle_init).
-       Skip the Start-menu launcher to avoid double representation. */
+    framework_launcher_register("Calculator", component_calc_launch, {
+        appName: "calc",
+        icon:    "🧮",
+        title:   "Calculator"
+    });
     framework_launcher_register("Local Storage", component_localstorage_launch, {
         appName: "localstorage",
         icon:    "🗂️",
@@ -48,6 +51,7 @@ function framework_on_init() {
     component_calc_handle_init();
     component_console_handle_init();
     component_chat_handle_init();
+    component_clock_handle_init();
     component_localstorage_handle_init();
     service_toast_handle_init();
 }
@@ -58,6 +62,12 @@ function framework_init() {
     window.addEventListener("resize", framework_on_window_resized);
 
     framework_on_init();
+
+    /* Expose window.shell as a live Proxy view of the registries. Done after
+       framework_on_init so all built-in apps are registered, but the Proxy
+       itself doesn't snapshot — late dynamic-install registrations are
+       picked up automatically. */
+    framework_shell_init();
 
     /* Sweep stale per-app localStorage entries now that every component
        has registered. Runs once per page load. */

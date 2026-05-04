@@ -37,13 +37,14 @@ function component_chat_launch() {
 
 function component_chat_create() {
 
-    const trayBtn = service_taskbar_get_tray_button("chat");
+    const trayBtn = framework_taskbar_get_tray_button("chat");
 
     chatServiceWindow = new ServiceWindow();
     chatServiceWindow.create({
         appName:     "chat",
         width:       480,
         height:      400,
+        shell:  shell,
         isDraggable: () => true,
         isResizable: () => true,
         trayButton:  trayBtn
@@ -261,7 +262,7 @@ function _chat_append_waiting() {
 function component_chat_handle_init() {
     ServiceWindow.registerApp("chat", component_chat_launch);
 
-    service_taskbar_register_tray_app({
+    framework_taskbar_register_tray_app({
         appName: "chat",
         label:   "Chat",
         icon:    CHAT_ICON_SVG,

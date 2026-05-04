@@ -55,23 +55,23 @@ src/
                                  #   tray button (or hides if already visible). Re-adoption is
                                  #   idempotent so the registry can swap buttons when the user
                                  #   hides/re-shows the icon.
-  service_taskbar.js             # KDE/Ubuntu desktop shell — wallpaper, bottom taskbar,
+  framework_taskbar.js             # KDE/Ubuntu desktop shell — wallpaper, bottom taskbar,
                                  #   Start menu, running-apps tracker, system tray, clock.
                                  #   Patches ServiceWindow.show/hide/defaultMinimize/Maximize
                                  #   to track open windows in the running-apps list. Also hosts:
-                                 #     service_taskbar_register_tray_app({appName,label,icon,
+                                 #     framework_taskbar_register_tray_app({appName,label,icon,
                                  #       title,onClick,onAdopt}) — high-level tray registry.
                                  #       Persists hidden state in localStorage["tm_tray_hidden_apps"];
                                  #       onAdopt(btn) fires every time a fresh button is created
                                  #       (initial registration AND each unhide) so callers can
                                  #       call ServiceWindow._adoptTrayButton on the new node.
-                                 #     service_taskbar_register_tray_icon — low-level: just
+                                 #     framework_taskbar_register_tray_icon — low-level: just
                                  #       creates a tray button. Most apps should use the
                                  #       _register_tray_app variant instead.
-                                 #     service_taskbar_get_tray_button(appName) — live button
+                                 #     framework_taskbar_get_tray_button(appName) — live button
                                  #       lookup (null if hidden). Used by component_*_create
                                  #       paths to wire ServiceWindow tray-mode at create time.
-                                 #     service_taskbar_list_tray_apps() — read-only registry
+                                 #     framework_taskbar_list_tray_apps() — read-only registry
                                  #       snapshot (used by orphan cleanup).
                                  #   The up-arrow in the right-side cluster opens a glass popup
                                  #   listing every registered tray app with: search input,
@@ -83,7 +83,7 @@ src/
                                  #     - "tm_window_<appName>" entries whose appName isn't in
                                  #       ServiceWindow._apps.
                                  #     - "tm_tray_hidden_apps" entries whose appName isn't in
-                                 #       service_taskbar_list_tray_apps().
+                                 #       framework_taskbar_list_tray_apps().
                                  #   Does NOT touch tab caches (tm_*_cache) or unknown keys.
                                  #   Logs a one-line summary via console.log when non-zero.
   component_kiosk.js             # component_kiosk() — auto-open + maximize when
@@ -139,8 +139,8 @@ Because everything ends up inside the same IIFE, **JavaScript function-declarati
   - `.appendControls()` is called by the caller after it has populated its own header content so the min/max/close cluster ends up at the right edge.
   - **Open/close animation:** every `show()` plays `_playOpenAnim()` (scale 0.85→1 + opacity 0→1 over 120ms) and every `hide()` plays `_playCloseAnim(done)` (scale 1→0.9 + opacity 1→0 over 100ms, then sets `display:none` in `done`). Origin is fixed at `"50% 100%"` (bottom-center / taskbar area) — no per-launcher anchoring. Honours `prefers-reduced-motion` by skipping the transform entirely. Transform / transformOrigin / opacity are cleared after the animation so drag, resize, and the tray-tail positioning math see a clean container. `_animTimer` cancels an in-flight close if the user re-opens the window mid-animation.
   - The class has **no knowledge of the editor's tabs, content elements, or windowMode semantics specific to this app** — those live in the caller's onClick handlers and in `component_window.js`'s min/max/close button bodies.
-- **System tray apps (`service_taskbar.js`)** — A second-class window pattern: instead of a launcher button, the app registers a tray icon via `service_taskbar_register_tray_app({appName, label, icon, title, onClick, onAdopt})`. Click toggles the window. Tray-mode windows are popups: min/max are hidden, the cyan focus border is suppressed, the window snaps above the tray icon on every show with a downward triangular tail decoration anchored to the icon, and any outside-click hides the window (timers/state preserved). The user can hide individual tray icons via the up-arrow overflow popup; `onAdopt(btn)` re-fires every time a fresh button is created (initial registration AND each unhide) so the owning component can call `ServiceWindow._adoptTrayButton` on the new DOM node. `component_calc.js` is the canonical example. Hidden state persists in `localStorage["tm_tray_hidden_apps"]`.
-- **Orphan cleanup (`framework_orphan_cleanup.js`)** — Runs once at the end of `framework_on_init` (after every component has registered). Removes `tm_window_<appName>` entries whose `appName` is no longer in `ServiceWindow._apps`, and prunes `tm_tray_hidden_apps` entries no longer in `service_taskbar_list_tray_apps()`. Does NOT touch tab caches or unknown keys. Logs a one-line summary via `console.log` only when something was actually removed. Add new prefixes here when you introduce new per-app keys.
+- **System tray apps (`framework_taskbar.js`)** — A second-class window pattern: instead of a launcher button, the app registers a tray icon via `framework_taskbar_register_tray_app({appName, label, icon, title, onClick, onAdopt})`. Click toggles the window. Tray-mode windows are popups: min/max are hidden, the cyan focus border is suppressed, the window snaps above the tray icon on every show with a downward triangular tail decoration anchored to the icon, and any outside-click hides the window (timers/state preserved). The user can hide individual tray icons via the up-arrow overflow popup; `onAdopt(btn)` re-fires every time a fresh button is created (initial registration AND each unhide) so the owning component can call `ServiceWindow._adoptTrayButton` on the new DOM node. `component_calc.js` is the canonical example. Hidden state persists in `localStorage["tm_tray_hidden_apps"]`.
+- **Orphan cleanup (`framework_orphan_cleanup.js`)** — Runs once at the end of `framework_on_init` (after every component has registered). Removes `tm_window_<appName>` entries whose `appName` is no longer in `ServiceWindow._apps`, and prunes `tm_tray_hidden_apps` entries no longer in `framework_taskbar_list_tray_apps()`. Does NOT touch tab caches or unknown keys. Logs a one-line summary via `console.log` only when something was actually removed. Add new prefixes here when you introduce new per-app keys.
 - **`createEditor()`** in `component_window.js` is the master DOM wirer: it instantiates `editorServiceWindow`, calls `.create()`, then calls `.registerTab` × 5 (Editor / Ascii / Question / Snippets / S-Preview) and `.registerAction` × 4 (↻ / Command / Check / GitHub). It then builds the editor's own content elements (main textarea, two column textareas, ascii/question/snippets textareas, S-Preview iframe), wires the min/max/close `onclick` bodies (these still know about editor-specific tab content elements), and calls `.appendControls()`. Called lazily on first launcher click.
 - **Tab system** — five tabs (Editor, Ascii design, Question, Snippets, S-Preview). Each generated tab caches `{ hash, content }` in both memory and localStorage. `simpleHash` (djb2) detects code changes; regeneration only happens when hash differs (or explicitly via Alt+R which clears the cache first).
 - **S-Preview** uses an iframe with `srcdoc` for isolated syntax-highlighted HTML rendering. `setSpreviewContent` injects a CSS reset to preserve indentation.

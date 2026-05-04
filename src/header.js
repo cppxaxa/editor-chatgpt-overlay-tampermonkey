@@ -9,6 +9,8 @@
 // @grant        none
 // ==/UserScript==
 
+var shell = {};
+
 (function () {
     'use strict';
 

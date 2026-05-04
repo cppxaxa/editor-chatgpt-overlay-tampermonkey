@@ -1,8 +1,8 @@
 // -----------------------------------------------------------------------------
-// service_taskbar.js — KDE/Ubuntu-style desktop shell + open-windows tracker.
+// framework_taskbar.js — KDE/Ubuntu-style desktop shell + open-windows tracker.
 //
 // Provides:
-//   service_taskbar_init()                 — idempotent. Builds the full-screen
+//   framework_taskbar_init()                 — idempotent. Builds the full-screen
 //                                            wallpaper, the bottom taskbar
 //                                            (start button, running apps list,
 //                                            system tray, up arrow, clock),
@@ -11,12 +11,12 @@
 //                                            ServiceWindow instance is tracked
 //                                            in the running-apps list
 //                                            automatically.
-//   service_taskbar_register_app(label, onlaunch)
+//   framework_taskbar_register_app(label, onlaunch)
 //                                          — append an entry to the Start menu.
 //                                            Clicking the entry runs onlaunch.
-//   service_taskbar_minimize_window(sw)    — minimize a tracked ServiceWindow
+//   framework_taskbar_minimize_window(sw)    — minimize a tracked ServiceWindow
 //                                            (used by the running-apps button).
-//   service_taskbar_restore_window(sw)     — restore (un-minimize / show) a
+//   framework_taskbar_restore_window(sw)     — restore (un-minimize / show) a
 //                                            tracked ServiceWindow.
 //
 // The taskbar button for a window toggles minimize/restore on click. Hidden
@@ -40,22 +40,22 @@ let _taskbar_tray_el       = null;
 let _taskbar_clock_el      = null;
 let _taskbar_clock_timer   = null;
 
-function service_taskbar_init() {
+function framework_taskbar_init() {
 
     if (_taskbar_initialized) return;
     _taskbar_initialized = true;
 
-    _service_taskbar_build_wallpaper();
-    _service_taskbar_build_taskbar();
-    _service_taskbar_build_start_menu();
-    _service_taskbar_patch_service_window();
-    _service_taskbar_start_clock();
-    _service_taskbar_install_hotkey();
+    _framework_taskbar_build_wallpaper();
+    _framework_taskbar_build_taskbar();
+    _framework_taskbar_build_start_menu();
+    _framework_taskbar_patch_service_window();
+    _framework_taskbar_start_clock();
+    _framework_taskbar_install_hotkey();
 
     /* Restore the "hidden shell" preference so the user's last choice
        survives a reload. */
-    if (_service_taskbar_is_hidden()) {
-        _service_taskbar_hide_shell();
+    if (framework_taskbar_is_hidden()) {
+        framework_taskbar_hide_shell();
     }
 
     /* Close start menu when clicking outside it. */
@@ -63,12 +63,30 @@ function service_taskbar_init() {
         if (!_taskbar_start_menu || _taskbar_start_menu.style.display === "none") return;
         if (_taskbar_start_menu.contains(e.target)) return;
         if (_taskbar_start_btn.contains(e.target)) return;
-        _service_taskbar_close_start_menu();
+        framework_taskbar_close_start_menu();
     });
 }
 
-function service_taskbar_register_app(label, onlaunch, opts) {
+/* Valid JS-identifier (so shell.launcher.<name>() always works). Numbers,
+   letters, _, $; cannot start with a digit. Deliberately strict — dynamic
+   installers must pick a clean appName up-front rather than relying on
+   downstream slug-mangling. */
+function _framework_taskbar_validate_app_name(appName) {
+    if (typeof appName !== "string" || appName.length === 0) {
+        throw new Error("framework_taskbar: appName must be a non-empty string");
+    }
+    if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(appName)) {
+        throw new Error("framework_taskbar: appName '" + appName +
+            "' must be a valid JS identifier (letters/digits/_/$, no leading digit)");
+    }
+}
+
+function framework_taskbar_register_app(label, onlaunch, opts) {
     opts = opts || {};
+    if (opts.appName) _framework_taskbar_validate_app_name(opts.appName);
+    if (opts.appName && _taskbar_apps.find(a => a.appName === opts.appName)) {
+        throw new Error("framework_taskbar: app '" + opts.appName + "' already registered");
+    }
     _taskbar_apps.push({
         label:    label,
         onlaunch: onlaunch,
@@ -76,14 +94,46 @@ function service_taskbar_register_app(label, onlaunch, opts) {
         title:    opts.title   || null,
         appName:  opts.appName || null   // for taskbar-icon lookup by ServiceWindow.appName
     });
-    _service_taskbar_rebuild_start_list("");
+    _framework_taskbar_rebuild_start_list("");
+}
+
+/* Remove a previously-registered Start-menu app. Returns true if removed,
+   false if not found. Safe no-throw API for hot-reload / dynamic uninstall. */
+function framework_taskbar_unregister_app(appName) {
+    const idx = _taskbar_apps.findIndex(a => a.appName === appName);
+    if (idx < 0) return false;
+    _taskbar_apps.splice(idx, 1);
+    _framework_taskbar_rebuild_start_list("");
+    return true;
+}
+
+/* Read-only snapshot of registered Start-menu apps. Used by framework_shell
+   to back the shell.launcher.<name>() Proxy. */
+function framework_taskbar_list_apps() {
+    return _taskbar_apps.map(a => ({
+        appName: a.appName,
+        label:   a.label,
+        icon:    a.icon,
+        title:   a.title
+    }));
+}
+
+/* Invoke a registered Start-menu app's onlaunch by appName. Throws if no
+   matching app is registered or it has no onlaunch. Used by framework_shell
+   so the shell file does not need to reach into the private registry. */
+function framework_taskbar_invoke_app(appName) {
+    const app = _taskbar_apps.find(a => a.appName === appName);
+    if (!app || typeof app.onlaunch !== "function") {
+        throw new Error("framework_taskbar: app '" + appName + "' has no onlaunch");
+    }
+    return app.onlaunch();
 }
 
 /* Resolve a human-readable label for an app by its ServiceWindow.appName.
    Looks up tray/Start-menu registries so the taskbar shows "Calculator"
    instead of "calc" and "Code Editor" instead of "editor". Falls back to
    the appName (capitalised) when no registration matches. */
-function service_taskbar_get_app_label(appName) {
+function framework_taskbar_get_app_label(appName) {
     if (!appName) return "Window";
 
     const trayApp = _tray_apps.find(a =>
@@ -105,7 +155,7 @@ function service_taskbar_get_app_label(appName) {
    specific), then the Start-menu app registry. Returns null if no icon
    is registered under that name. Used by the taskbar's running-apps
    button renderer to give every open window a recognisable glyph. */
-function service_taskbar_get_app_icon(appName) {
+function framework_taskbar_get_app_icon(appName) {
     if (!appName) return null;
 
     /* Tray-app registry — also try matching by label since some callers
@@ -124,7 +174,7 @@ function service_taskbar_get_app_icon(appName) {
 
 /* ---- Wallpaper ---- */
 
-function _service_taskbar_build_wallpaper() {
+function _framework_taskbar_build_wallpaper() {
 
     const wp = document.createElement("div");
 
@@ -152,7 +202,7 @@ function _service_taskbar_build_wallpaper() {
     /* Clicking the empty wallpaper closes any open start menu — mimics OS
        "click empty desktop dismisses popups" behaviour. */
     wp.addEventListener("mousedown", () => {
-        _service_taskbar_close_start_menu();
+        framework_taskbar_close_start_menu();
     });
 
     document.body.appendChild(wp);
@@ -188,7 +238,7 @@ function _service_taskbar_build_wallpaper() {
    like it's rotating. On click, .tm-start-icon-clicked plays a quick
    stagger flash (TL → TR → BR → BL pulse to bright cyan-white) then
    settles. */
-function _service_taskbar_inject_styles() {
+function _framework_taskbar_inject_styles() {
 
     if (document.getElementById("tm-taskbar-styles")) return;
 
@@ -234,7 +284,7 @@ function _service_taskbar_inject_styles() {
     document.head.appendChild(style);
 }
 
-function _service_taskbar_build_taskbar() {
+function _framework_taskbar_build_taskbar() {
 
     const bar = document.createElement("div");
 
@@ -265,8 +315,8 @@ function _service_taskbar_build_taskbar() {
        Each pane uses a different shade of white at rest. On hover the panes
        cycle their shades clockwise (rotation feel). On click the panes flash
        in a stagger (TL → TR → BR → BL) before settling back. Animations are
-       defined once in service_taskbar_inject_styles(). */
-    _service_taskbar_inject_styles();
+       defined once in framework_taskbar_inject_styles(). */
+    _framework_taskbar_inject_styles();
 
     const startBtn = document.createElement("button");
     startBtn.className = "tm-start-btn";
@@ -347,7 +397,7 @@ function _service_taskbar_build_taskbar() {
             void icon.offsetWidth;
             icon.classList.add("tm-start-icon-clicked");
         }
-        _service_taskbar_toggle_start_menu();
+        framework_taskbar_toggle_start_menu();
     };
     bar.appendChild(startBtn);
     _taskbar_start_btn = startBtn;
@@ -399,7 +449,7 @@ function _service_taskbar_build_taskbar() {
     up.onmouseout  = () => { up.style.background = "transparent"; };
     up.onclick = (e) => {
         e.stopPropagation();
-        _service_taskbar_open_tray_overflow(up);
+        _framework_taskbar_open_tray_overflow(up);
     };
     right.appendChild(up);
 
@@ -440,7 +490,7 @@ function _service_taskbar_build_taskbar() {
     _taskbar_el = bar;
 }
 
-function _service_taskbar_start_clock() {
+function _framework_taskbar_start_clock() {
 
     const tick = () => {
         if (!_taskbar_clock_el) return;
@@ -461,7 +511,7 @@ function _service_taskbar_start_clock() {
 
 /* ---- Start menu ---- */
 
-function _service_taskbar_build_start_menu() {
+function _framework_taskbar_build_start_menu() {
 
     const menu = document.createElement("div");
 
@@ -510,7 +560,7 @@ function _service_taskbar_build_start_menu() {
         outline: "none"
     });
     search.addEventListener("input", () => {
-        _service_taskbar_rebuild_start_list(search.value || "");
+        _framework_taskbar_rebuild_start_list(search.value || "");
     });
     search.addEventListener("keydown", (e) => {
         if (e.key === "Enter") {
@@ -518,7 +568,7 @@ function _service_taskbar_build_start_menu() {
             const first = _taskbar_start_list.querySelector("button[data-app-entry]");
             if (first) first.click();
         } else if (e.key === "Escape") {
-            _service_taskbar_close_start_menu();
+            framework_taskbar_close_start_menu();
         }
     });
     searchWrap.appendChild(search);
@@ -550,7 +600,7 @@ function _service_taskbar_build_start_menu() {
     arrow.onmouseout  = () => { arrow.style.background = "rgba(255,255,255,0.06)"; };
     arrow.onclick = (e) => {
         e.stopPropagation();
-        _service_taskbar_open_options_menu();
+        _framework_taskbar_open_options_menu();
     };
     searchWrap.appendChild(arrow);
 
@@ -570,7 +620,7 @@ function _service_taskbar_build_start_menu() {
     _taskbar_start_menu = menu;
 }
 
-function _service_taskbar_rebuild_start_list(filter) {
+function _framework_taskbar_rebuild_start_list(filter) {
 
     if (!_taskbar_start_list) return;
 
@@ -682,7 +732,7 @@ function _service_taskbar_rebuild_start_list(filter) {
         entry.onmouseover = () => { entry.style.background = "rgba(255,255,255,0.08)"; };
         entry.onmouseout  = () => { entry.style.background = "transparent"; };
         entry.onclick = () => {
-            _service_taskbar_close_start_menu();
+            framework_taskbar_close_start_menu();
             try { app.onlaunch(); }
             catch (err) { console.error("taskbar launch threw:", err); }
         };
@@ -690,7 +740,7 @@ function _service_taskbar_rebuild_start_list(filter) {
     });
 }
 
-function _service_taskbar_toggle_start_menu() {
+function framework_taskbar_toggle_start_menu() {
     if (!_taskbar_start_menu) return;
     if (_taskbar_start_menu.style.display === "none") {
         _taskbar_start_menu.style.display = "flex";
@@ -702,14 +752,14 @@ function _service_taskbar_toggle_start_menu() {
             _taskbar_start_menu.style.zIndex = String(ServiceWindow._zCounter + 10);
         }
         _taskbar_start_search.value = "";
-        _service_taskbar_rebuild_start_list("");
+        _framework_taskbar_rebuild_start_list("");
         setTimeout(() => _taskbar_start_search.focus(), 0);
     } else {
-        _service_taskbar_close_start_menu();
+        framework_taskbar_close_start_menu();
     }
 }
 
-function _service_taskbar_close_start_menu() {
+function framework_taskbar_close_start_menu() {
     if (_taskbar_start_menu) _taskbar_start_menu.style.display = "none";
 }
 
@@ -721,7 +771,7 @@ function _service_taskbar_close_start_menu() {
    Listener attached at capture phase on window so it fires regardless of
    which textarea / button currently has focus. preventDefault +
    stopPropagation prevent the page from also reacting to the chord. */
-function _service_taskbar_install_hotkey() {
+function _framework_taskbar_install_hotkey() {
 
     window.addEventListener("keydown", (e) => {
 
@@ -752,7 +802,7 @@ function _service_taskbar_install_hotkey() {
         if (k === "x") {
             e.preventDefault();
             e.stopPropagation();
-            _service_taskbar_toggle_start_menu();
+            framework_taskbar_toggle_start_menu();
             return;
         }
 
@@ -774,7 +824,7 @@ function _service_taskbar_install_hotkey() {
 
 /* ---- Open-windows tracking ---- */
 
-function _service_taskbar_patch_service_window() {
+function _framework_taskbar_patch_service_window() {
 
     const origShow = ServiceWindow.prototype.show;
     const origHide = ServiceWindow.prototype.hide;
@@ -783,37 +833,37 @@ function _service_taskbar_patch_service_window() {
 
     ServiceWindow.prototype.show = function () {
         origShow.call(this);
-        _service_taskbar_on_show(this);
+        _framework_taskbar_on_show(this);
     };
 
     ServiceWindow.prototype.hide = function () {
         origHide.call(this);
-        _service_taskbar_on_hide(this);
+        _framework_taskbar_on_hide(this);
     };
 
     ServiceWindow.prototype.defaultMinimize = function () {
         origMin.call(this);
-        _service_taskbar_update_button(this);
+        _framework_taskbar_update_button(this);
     };
 
     ServiceWindow.prototype.defaultMaximize = function () {
         origMax.call(this);
-        _service_taskbar_update_button(this);
+        _framework_taskbar_update_button(this);
     };
 }
 
-function _service_taskbar_find_entry(sw) {
+function _framework_taskbar_find_entry(sw) {
     return _taskbar_windows.find(w => w.sw === sw) || null;
 }
 
-function _service_taskbar_on_show(sw) {
+function _framework_taskbar_on_show(sw) {
 
     if (!_taskbar_running_el) return;
     /* Tray-hosted windows are represented by their tray icon, not by a
        running-apps button — skip tracking. */
     if (sw && sw._trayHandle) return;
-    if (_service_taskbar_find_entry(sw)) {
-        _service_taskbar_update_button(sw);
+    if (_framework_taskbar_find_entry(sw)) {
+        _framework_taskbar_update_button(sw);
         return;
     }
 
@@ -822,8 +872,8 @@ function _service_taskbar_on_show(sw) {
        icon/title once and every running-apps button picks it up
        automatically. So an editor window with appName="editor" shows up as
        "Code Editor" with a 📝 glyph, not raw "editor". */
-    const label = service_taskbar_get_app_label(sw.appName);
-    const icon  = service_taskbar_get_app_icon(sw.appName);
+    const label = framework_taskbar_get_app_label(sw.appName);
+    const icon  = framework_taskbar_get_app_icon(sw.appName);
 
     const btn = document.createElement("button");
     btn.title = label;
@@ -921,20 +971,20 @@ function _service_taskbar_on_show(sw) {
             return;
         }
         if (sw.mode === "minimized") {
-            service_taskbar_restore_window(sw);
+            framework_taskbar_restore_window(sw);
         } else {
-            service_taskbar_minimize_window(sw);
+            framework_taskbar_minimize_window(sw);
         }
     };
 
     _taskbar_running_el.appendChild(btn);
     _taskbar_windows.push({ sw, btn });
-    _service_taskbar_update_button(sw);
+    _framework_taskbar_update_button(sw);
 }
 
-function _service_taskbar_on_hide(sw) {
+function _framework_taskbar_on_hide(sw) {
 
-    const entry = _service_taskbar_find_entry(sw);
+    const entry = _framework_taskbar_find_entry(sw);
     if (!entry) return;
 
     if (entry.btn.parentElement) entry.btn.parentElement.removeChild(entry.btn);
@@ -942,9 +992,9 @@ function _service_taskbar_on_hide(sw) {
     if (idx >= 0) _taskbar_windows.splice(idx, 1);
 }
 
-function _service_taskbar_update_button(sw) {
+function _framework_taskbar_update_button(sw) {
 
-    const entry = _service_taskbar_find_entry(sw);
+    const entry = _framework_taskbar_find_entry(sw);
     if (!entry) return;
 
     const btn = entry.btn;
@@ -978,15 +1028,15 @@ function _service_taskbar_update_button(sw) {
 }
 
 /* ---- System tray icons ----
-   Components register a tray icon via service_taskbar_register_tray_icon.
+   Components register a tray icon via framework_taskbar_register_tray_icon.
    Returns a handle so the caller can remove the icon when its window
    closes. The button's onClick receives the button DOM node so the caller
    can compute the popup anchor (e.g. ServiceWindow tray-mode positions
    itself just above this button). */
 
-function service_taskbar_register_tray_icon(opts) {
+function framework_taskbar_register_tray_icon(opts) {
 
-    service_taskbar_init();
+    framework_taskbar_init();
     if (!_taskbar_tray_el) return null;
 
     const btn = document.createElement("button");
@@ -1033,7 +1083,7 @@ function service_taskbar_register_tray_icon(opts) {
 }
 
 /* ---- Tray app registry ----
-   Higher-level than service_taskbar_register_tray_icon. Apps register once;
+   Higher-level than framework_taskbar_register_tray_icon. Apps register once;
    the registry manages whether the icon is currently in the tray (controlled
    by the user via the up-arrow overflow popup) and persists that preference
    across reloads.
@@ -1058,7 +1108,7 @@ const TRAY_HIDDEN_KEY = "tm_tray_hidden_apps";
 
 let _tray_apps = [];   // [{ appName, label, icon, title, onClick, onAdopt, handle }]
 
-function _service_taskbar_load_hidden() {
+function _framework_taskbar_load_hidden() {
     try {
         const raw = localStorage.getItem(TRAY_HIDDEN_KEY);
         if (!raw) return [];
@@ -1067,26 +1117,31 @@ function _service_taskbar_load_hidden() {
     } catch (e) { return []; }
 }
 
-function _service_taskbar_save_hidden(arr) {
+function _framework_taskbar_save_hidden(arr) {
     try { localStorage.setItem(TRAY_HIDDEN_KEY, JSON.stringify(arr)); }
     catch (e) {}
 }
 
-function _service_taskbar_is_app_hidden(appName) {
-    return _service_taskbar_load_hidden().indexOf(appName) >= 0;
+function _framework_taskbar_is_app_hidden(appName) {
+    return _framework_taskbar_load_hidden().indexOf(appName) >= 0;
 }
 
-function _service_taskbar_set_app_hidden(appName, hidden) {
-    let arr = _service_taskbar_load_hidden();
+function _framework_taskbar_set_app_hidden(appName, hidden) {
+    let arr = _framework_taskbar_load_hidden();
     const idx = arr.indexOf(appName);
     if (hidden && idx < 0) arr.push(appName);
     if (!hidden && idx >= 0) arr.splice(idx, 1);
-    _service_taskbar_save_hidden(arr);
+    _framework_taskbar_save_hidden(arr);
 }
 
-function service_taskbar_register_tray_app(opts) {
+function framework_taskbar_register_tray_app(opts) {
 
-    service_taskbar_init();
+    framework_taskbar_init();
+
+    _framework_taskbar_validate_app_name(opts.appName);
+    if (_tray_apps.find(a => a.appName === opts.appName)) {
+        throw new Error("framework_taskbar: tray app '" + opts.appName + "' already registered");
+    }
 
     const app = {
         appName: opts.appName,
@@ -1099,21 +1154,33 @@ function service_taskbar_register_tray_app(opts) {
     };
     _tray_apps.push(app);
 
-    if (!_service_taskbar_is_app_hidden(app.appName)) {
-        _service_taskbar_show_app(app);
+    if (!_framework_taskbar_is_app_hidden(app.appName)) {
+        _framework_taskbar_show_app(app);
     }
 
     return {
         /* Programmatic show/hide — same path as the user's overflow toggle. */
         setVisible(on) {
-            _service_taskbar_set_app_visibility(app.appName, on);
+            framework_taskbar_set_app_visibility(app.appName, on);
         }
     };
 }
 
-function _service_taskbar_show_app(app) {
+/* Remove a previously-registered tray app. Returns true if removed,
+   false if not found. Safe no-throw API for hot-reload / dynamic uninstall.
+   Also tears down the live tray button (if any) so the icon disappears. */
+function framework_taskbar_unregister_tray_app(appName) {
+    const idx = _tray_apps.findIndex(a => a.appName === appName);
+    if (idx < 0) return false;
+    const app = _tray_apps[idx];
+    _framework_taskbar_hide_app(app);
+    _tray_apps.splice(idx, 1);
+    return true;
+}
+
+function _framework_taskbar_show_app(app) {
     if (app.handle) return;   // already shown
-    app.handle = service_taskbar_register_tray_icon({
+    app.handle = framework_taskbar_register_tray_icon({
         icon:  app.icon,
         title: app.title,
         onClick: (btn) => {
@@ -1125,25 +1192,25 @@ function _service_taskbar_show_app(app) {
     }
 }
 
-function _service_taskbar_hide_app(app) {
+function _framework_taskbar_hide_app(app) {
     if (!app.handle) return;
     app.handle.remove();
     app.handle = null;
 }
 
-function _service_taskbar_set_app_visibility(appName, on) {
+function framework_taskbar_set_app_visibility(appName, on) {
     const app = _tray_apps.find(a => a.appName === appName);
     if (!app) return;
-    _service_taskbar_set_app_hidden(appName, !on);
-    if (on) _service_taskbar_show_app(app);
-    else    _service_taskbar_hide_app(app);
+    _framework_taskbar_set_app_hidden(appName, !on);
+    if (on) _framework_taskbar_show_app(app);
+    else    _framework_taskbar_hide_app(app);
 }
 
 /* Look up the live tray button for an app, if currently visible.
    Returns null if the app isn't registered or is hidden. Used by
    component_*_create paths that want to wire the ServiceWindow against
    whatever button currently exists. */
-function service_taskbar_get_tray_button(appName) {
+function framework_taskbar_get_tray_button(appName) {
     const app = _tray_apps.find(a => a.appName === appName);
     if (!app || !app.handle) return null;
     return app.handle.button;
@@ -1153,12 +1220,24 @@ function service_taskbar_get_tray_button(appName) {
    framework_orphan_cleanup to detect stale entries in the
    tm_tray_hidden_apps list. Returns shallow clones — callers must not
    mutate live registry state. */
-function service_taskbar_list_tray_apps() {
+function framework_taskbar_list_tray_apps() {
     return _tray_apps.map(a => ({
         appName: a.appName,
         label:   a.label,
         icon:    a.icon
     }));
+}
+
+/* Invoke a registered tray app's onClick by appName. Re-uses the live tray
+   button (if visible) so click-coordinate-dependent decoration (the tail)
+   positions correctly. Throws if no matching tray app is registered. */
+function framework_taskbar_invoke_tray_app(appName) {
+    const app = _tray_apps.find(a => a.appName === appName);
+    if (!app) {
+        throw new Error("framework_taskbar: tray app '" + appName + "' is not registered");
+    }
+    const btn = framework_taskbar_get_tray_button(appName);
+    if (typeof app.onClick === "function") app.onClick(btn);
 }
 
 /* ---- Tray overflow popup ----
@@ -1169,7 +1248,7 @@ function service_taskbar_list_tray_apps() {
 
 let _tray_overflow_popup = null;
 
-function _service_taskbar_close_tray_overflow() {
+function _framework_taskbar_close_tray_overflow() {
     if (_tray_overflow_popup) {
         if (_tray_overflow_popup._cleanup) _tray_overflow_popup._cleanup();
         if (_tray_overflow_popup.parentNode) {
@@ -1179,9 +1258,9 @@ function _service_taskbar_close_tray_overflow() {
     }
 }
 
-function _service_taskbar_open_tray_overflow(anchorBtn) {
+function _framework_taskbar_open_tray_overflow(anchorBtn) {
 
-    _service_taskbar_close_tray_overflow();
+    _framework_taskbar_close_tray_overflow();
 
     const popup = document.createElement("div");
     Object.assign(popup.style, {
@@ -1302,18 +1381,18 @@ function _service_taskbar_open_tray_overflow(anchorBtn) {
                 } else {
                     app.onClick(anchorBtn);
                 }
-                _service_taskbar_close_tray_overflow();
+                _framework_taskbar_close_tray_overflow();
             };
             row.appendChild(launchBtn);
 
             /* Show-in-tray toggle */
-            const visible = !_service_taskbar_is_app_hidden(app.appName);
+            const visible = !_framework_taskbar_is_app_hidden(app.appName);
             const sw = _service_menu_make_switch(visible);
             sw.el.style.cursor = "pointer";
             sw.el.title = "Show in tray";
             sw.el.addEventListener("click", () => {
-                const next = _service_taskbar_is_app_hidden(app.appName);  // toggle: hidden -> visible
-                _service_taskbar_set_app_visibility(app.appName, next);
+                const next = _framework_taskbar_is_app_hidden(app.appName);  // toggle: hidden -> visible
+                framework_taskbar_set_app_visibility(app.appName, next);
                 sw.set(next);
             });
             row.appendChild(sw.el);
@@ -1324,7 +1403,7 @@ function _service_taskbar_open_tray_overflow(anchorBtn) {
 
     search.addEventListener("input", rebuild);
     search.addEventListener("keydown", (e) => {
-        if (e.key === "Escape") _service_taskbar_close_tray_overflow();
+        if (e.key === "Escape") _framework_taskbar_close_tray_overflow();
     });
 
     rebuild();
@@ -1349,10 +1428,10 @@ function _service_taskbar_open_tray_overflow(anchorBtn) {
     const onDown = (e) => {
         if (popup.contains(e.target)) return;
         if (anchorBtn.contains(e.target)) return;
-        _service_taskbar_close_tray_overflow();
+        _framework_taskbar_close_tray_overflow();
     };
     const onKey = (e) => {
-        if (e.key === "Escape") _service_taskbar_close_tray_overflow();
+        if (e.key === "Escape") _framework_taskbar_close_tray_overflow();
     };
     setTimeout(() => {
         document.addEventListener("mousedown", onDown, true);
@@ -1364,12 +1443,12 @@ function _service_taskbar_open_tray_overflow(anchorBtn) {
     };
 }
 
-function service_taskbar_minimize_window(sw) {
+function framework_taskbar_minimize_window(sw) {
     if (!sw) return;
     if (sw.mode !== "minimized") sw.defaultMinimize();
 }
 
-function service_taskbar_restore_window(sw) {
+function framework_taskbar_restore_window(sw) {
     if (!sw) return;
     if (!sw.visible) sw.show();
     if (sw.mode === "minimized") sw.defaultMinimize();   // toggles back to normal
@@ -1387,7 +1466,7 @@ const TASKBAR_HIDDEN_KEY = "tm_taskbar_shell_hidden";
 let _taskbar_restore_btn  = null;
 let _taskbar_options_menu = null;
 
-function _service_taskbar_open_options_menu() {
+function _framework_taskbar_open_options_menu() {
 
     /* Anchor the popup at the last pointer position so it appears under the
        user's mouse / touch (the requested behaviour). The menu also clamps
@@ -1401,49 +1480,49 @@ function _service_taskbar_open_options_menu() {
     _taskbar_options_menu
         .addToggle({
             label: "Hide desktop shell",
-            getter: () => _service_taskbar_is_hidden(),
+            getter: () => framework_taskbar_is_hidden(),
             setter: (on) => {
-                if (on) _service_taskbar_hide_shell();
-                else    _service_taskbar_show_shell();
+                if (on) framework_taskbar_hide_shell();
+                else    framework_taskbar_show_shell();
             }
         })
         .openAt(p.x, p.y);
 }
 
-function _service_taskbar_is_hidden() {
+function framework_taskbar_is_hidden() {
     try { return localStorage.getItem(TASKBAR_HIDDEN_KEY) === "true"; }
     catch (e) { return false; }
 }
 
-function _service_taskbar_set_hidden(flag) {
+function _framework_taskbar_set_hidden(flag) {
     try { localStorage.setItem(TASKBAR_HIDDEN_KEY, flag ? "true" : "false"); }
     catch (e) {}
 }
 
-function _service_taskbar_hide_shell() {
+function framework_taskbar_hide_shell() {
 
-    _service_taskbar_close_start_menu();
+    framework_taskbar_close_start_menu();
 
     if (_taskbar_wallpaper_el) _taskbar_wallpaper_el.style.display = "none";
     if (_taskbar_el)           _taskbar_el.style.display           = "none";
 
-    _service_taskbar_set_hidden(true);
-    _service_taskbar_show_restore_btn();
+    _framework_taskbar_set_hidden(true);
+    _framework_taskbar_show_restore_btn();
 }
 
-function _service_taskbar_show_shell() {
+function framework_taskbar_show_shell() {
 
     if (_taskbar_wallpaper_el) _taskbar_wallpaper_el.style.display = "block";
     if (_taskbar_el)           _taskbar_el.style.display           = "flex";
 
-    _service_taskbar_set_hidden(false);
-    _service_taskbar_hide_restore_btn();
+    _framework_taskbar_set_hidden(false);
+    _framework_taskbar_hide_restore_btn();
 }
 
 /* Floating restore button, bottom-right. Mirrors the simple-launcher anchor
    on the opposite corner so it doesn't visually clash with whatever the
    user is doing. */
-function _service_taskbar_show_restore_btn() {
+function _framework_taskbar_show_restore_btn() {
 
     if (_taskbar_restore_btn) {
         _taskbar_restore_btn.style.display = "flex";
@@ -1480,13 +1559,13 @@ function _service_taskbar_show_restore_btn() {
     btn.onmouseover = () => { btn.style.background = "#2196f3"; };
     btn.onmouseout  = () => { btn.style.background = "#1976d2"; };
     btn.onclick = () => {
-        _service_taskbar_show_shell();
+        framework_taskbar_show_shell();
     };
 
     document.body.appendChild(btn);
     _taskbar_restore_btn = btn;
 }
 
-function _service_taskbar_hide_restore_btn() {
+function _framework_taskbar_hide_restore_btn() {
     if (_taskbar_restore_btn) _taskbar_restore_btn.style.display = "none";
 }

@@ -41,6 +41,7 @@ class ServiceWindow {
         this._tabs           = [];   // [{ id, button }]
         this._activeTabId    = null;
         this._lastActiveAt   = 0;    // timestamp set on each _markActive call
+        this._shell          = null; // shell object for programmatic API
     }
 
     /* Build container + header + min/max/close + drag wiring + resize handle.
@@ -69,6 +70,7 @@ class ServiceWindow {
             throw new Error("ServiceWindow.create: opts.appName is required");
         }
         this.appName = opts.appName;
+        this._shell  = opts.shell || null;
 
         const width  = opts.width  || 500;
         const height = opts.height || 350;
@@ -224,7 +226,7 @@ class ServiceWindow {
 
     _installTrayMode(opts) {
 
-        const handle = service_taskbar_register_tray_icon({
+        const handle = framework_taskbar_register_tray_icon({
             icon:    opts.icon,
             title:   opts.title,
             onClick: (btn) => this._toggleFromTray(btn)
@@ -351,6 +353,16 @@ class ServiceWindow {
     /* Snap the window above the tray button and show it. Always re-snaps
        (per user's choice) — any drag is forgotten on next tray click. */
     _toggleFromTray(btn) {
+
+        /* Hide every OTHER visible tray-mode window first. With mouse clicks
+           the outside-click handler takes care of this, but keyboard shortcuts
+           (Ctrl+1..9) don't fire mousedown so we must do it explicitly. */
+        for (const sw of ServiceWindow._instances) {
+            if (sw === this) continue;
+            if (sw._trayAdopted && sw.visible && sw.mode !== "minimized") {
+                sw.hide();
+            }
+        }
 
         if (this.visible && this.mode !== "minimized") {
             this.hide();
@@ -783,6 +795,12 @@ class ServiceWindow {
     persistState() {
         if (!this.appName || !this.container) return;
         const key = ServiceWindow._stateKey(this.appName);
+
+        /* Tray-mode windows snap above the tray icon on every show, so
+           persisting geometry is pointless. They also should not auto-restore
+           on page load, so skip the visible flag entirely. */
+        if (this._trayAdopted) return;
+
         const state = {
             left:           this.container.style.left,
             top:            this.container.style.top,
@@ -801,6 +819,8 @@ class ServiceWindow {
        based on state.visible (typically driven by framework_system_restore). */
     restoreState() {
         if (!this.appName || !this.container) return null;
+        if (this._trayAdopted) return null;
+
         const key = ServiceWindow._stateKey(this.appName);
         let state;
         try {
@@ -836,6 +856,52 @@ class ServiceWindow {
        min/max/close cluster ends up at the right edge of the header. */
     appendControls() {
         this.headerEl.appendChild(this._controlsEl);
+        if (this._shell) this._buildShellAPI();
+    }
+
+    /* Re-scan [data-shell] elements and rebuild the shell namespace.
+       Call after dynamically adding new data-shell elements. */
+    refreshShellAPI() {
+        if (this._shell) this._buildShellAPI();
+    }
+
+    /* Walk this.container for [data-shell] elements and generate
+       getter/setter/action methods on shell.<appName>. */
+    _buildShellAPI() {
+        const self = this;
+        const ns = {};
+
+        /* Utility: "operand1" → "Operand1" for method name suffixes */
+        function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+
+        this.container.querySelectorAll("[data-shell]").forEach(function (el) {
+            const name = el.dataset.shell;
+            const tag  = el.tagName.toLowerCase();
+            const type = (el.type || "").toLowerCase();
+
+            if (tag === "input" && type === "checkbox") {
+                ns["is" + cap(name)]  = function ()  { return el.checked; };
+                ns["set" + cap(name)] = function (v) { el.checked = !!v; };
+            } else if (tag === "input" || tag === "textarea") {
+                ns["get" + cap(name)] = function ()  { return el.value; };
+                ns["set" + cap(name)] = function (v) { el.value = v; };
+            } else if (tag === "select") {
+                ns["get" + cap(name)] = function ()  { return el.value; };
+                ns["set" + cap(name)] = function (v) { el.value = v; };
+            } else if (tag === "button") {
+                ns["click" + cap(name)] = function () { el.click(); };
+            } else {
+                /* div, span, label, or any other element — read-only text */
+                ns["get" + cap(name)] = function () { return el.textContent; };
+            }
+        });
+
+        /* Window-level helpers */
+        ns.show      = function () { self.show(); };
+        ns.hide      = function () { self.hide(); };
+        ns.isVisible = function () { return self.visible; };
+
+        this._shell[this.appName] = ns;
     }
 
     /* Create a body <div> below the header, append it to the container,
@@ -873,11 +939,13 @@ class ServiceWindow {
     }
 
     /* Create a styled label <div>. Caller updates .textContent later to
-       reflect dynamic state. */
-    createLabel(text) {
+       reflect dynamic state.
+       shellName — optional data-shell key for the shell API. */
+    createLabel(text, shellName) {
 
         const el = document.createElement("div");
         el.textContent = text || "";
+        if (shellName) el.dataset.shell = shellName;
 
         Object.assign(el.style, {
             marginTop: "4px",
@@ -889,12 +957,14 @@ class ServiceWindow {
     }
 
     /* Create a styled <input type="text"> textbox. Caller sets .type /
-       .value / .onchange / extra attributes after construction. */
-    createTextbox(placeholder) {
+       .value / .onchange / extra attributes after construction.
+       shellName — optional data-shell key for the shell API. */
+    createTextbox(placeholder, shellName) {
 
         const input = document.createElement("input");
         input.type = "text";
         if (placeholder) input.placeholder = placeholder;
+        if (shellName) input.dataset.shell = shellName;
 
         Object.assign(input.style, {
             background: "#2a2a2a",
@@ -911,11 +981,13 @@ class ServiceWindow {
     }
 
     /* Create a primary action button (filled, accent-coloured). Caller wires
-       .onclick / .title / extra styles after construction. */
-    createPrimaryButton(label) {
+       .onclick / .title / extra styles after construction.
+       shellName — optional data-shell key for the shell API. */
+    createPrimaryButton(label, shellName) {
 
         const btn = document.createElement("button");
         btn.textContent = label || "OK";
+        if (shellName) btn.dataset.shell = shellName;
 
         Object.assign(btn.style, {
             background: "#4fc3f7",
@@ -928,6 +1000,66 @@ class ServiceWindow {
         });
 
         return btn;
+    }
+
+    /* Create a checkbox wrapper: <div> containing <input type="checkbox"> +
+       <span> label. The checkbox input is stored as wrapper.checkbox for
+       programmatic access.
+       shellName — optional data-shell key for the shell API. */
+    createCheckbox(label, shellName) {
+
+        const wrapper = document.createElement("div");
+        Object.assign(wrapper.style, {
+            display: "flex",
+            alignItems: "center",
+            gap: "6px"
+        });
+
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        if (shellName) cb.dataset.shell = shellName;
+
+        const span = document.createElement("span");
+        span.textContent = label || "";
+        Object.assign(span.style, { color: "#ddd", fontSize: "13px" });
+
+        wrapper.appendChild(cb);
+        wrapper.appendChild(span);
+        wrapper.checkbox = cb;
+
+        return wrapper;
+    }
+
+    /* Create a styled <select> element. `options` is an array of
+       {value, label} objects or plain strings.
+       shellName — optional data-shell key for the shell API. */
+    createSelect(options, shellName) {
+
+        const sel = document.createElement("select");
+        if (shellName) sel.dataset.shell = shellName;
+
+        (options || []).forEach(function (opt) {
+            const o = document.createElement("option");
+            if (typeof opt === "string") {
+                o.value = opt;
+                o.textContent = opt;
+            } else {
+                o.value = opt.value;
+                o.textContent = opt.label || opt.value;
+            }
+            sel.appendChild(o);
+        });
+
+        Object.assign(sel.style, {
+            background: "#2a2a2a",
+            color: "white",
+            border: "1px solid #444",
+            borderRadius: "4px",
+            padding: "4px 6px",
+            fontSize: "13px"
+        });
+
+        return sel;
     }
 
     /* Register a tab. Adds a styled button to .tabBarEl that, when clicked,
