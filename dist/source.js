@@ -2281,6 +2281,10 @@ function _component_console_ai_submit(userText) {
         "- Do NOT produce commands that would be a syntax error in isolation (e.g. dangling brackets, unclosed strings).\n" +
         "- Each command is eval'd separately — do NOT split a single statement across multiple commands.\n" +
         "\nShell & discovery:\n" +
+        "- CRITICAL: If you do not know the exact signature of a function (e.g. addAlarm(), addTimer(), setTime()), " +
+        "you MUST inspect it first with console.dir(<fn>) before invoking it. " +
+        "All functions, if not used with the correct arguments, can produce unintended or disastrous side effects. " +
+        "Never guess parameters — always discover first, then invoke.\n" +
         "- IMPORTANT: When you are unsure about an object's API, use console.dir(obj) to inspect it first (with isFinal: false) before calling methods. " +
         "For example, console.dir(shell.clock) will show you all available methods and sub-objects. " +
         "This is especially useful for dynamically-built namespaces where the exact method signatures may vary.\n" +
