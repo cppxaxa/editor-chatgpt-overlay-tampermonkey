@@ -6536,24 +6536,61 @@ function service_hotkeys_handle_init() {
 
 // ===== src/service_llm.js =====
 // -----------------------------------------------------------------------------
-// service_llm.js — small library for talking to the ChatGPT web UI.
+// service_llm.js — LLM provider abstraction layer.
 //
-// Public API:
+// This is the ONLY file that contains site-specific DOM selectors. Every other
+// component in the codebase talks to the LLM exclusively through the public
+// queue API (submitMessage / flushLlmQueue / cancelCurrentLlmJob). To port the
+// entire UI stack to a different LLM website (e.g. Gemini, Claude, Copilot),
+// rewrite the 5 provider functions below and update header.js @match — nothing
+// else needs to change.
 //
-//     const answer = await sendMessage("Your prompt here");
-//     // answer === string on success, null on failure / cancel.
+// ── Provider functions (site-specific, ~170 lines) ──────────────────────────
 //
-// Internally this drives ChatGPT's prompt textarea, clicks send, watches the
-// DOM for a new assistant message, waits for streaming to finish, and returns
-// the cleaned text.
+//   insertTextIntoChatGPT_llm(prompt)
+//       Insert `prompt` text into the site's input textarea / contenteditable.
+//       Current selector: #prompt-textarea
 //
-// Cancellation: the queue tracks the currently-running job. Calling
-// `cancelCurrentLlmJob()` flips a flag that `waitForAssistantResponse_llm`
-// observes on its next poll tick and bails out, resolving with `null`.
+//   waitForSendButton_llm()
+//       Poll until the send button is enabled and return it (or null on timeout).
+//       Current selector: button[data-testid="send-button"]:not([disabled])
 //
-// All helpers are named with a `_llm` suffix so they don't collide with the
-// equivalents in component_chatgpt.js when both files are concatenated into
-// the same IIFE. `sendMessage` is the only public symbol.
+//   waitForAssistantResponse_llm(previousCount)
+//       Two-phase poll: (1) wait for a new assistant message to appear,
+//       (2) wait for streaming to stop (stop button disappears), then return
+//       the cleaned response text.
+//       Current selector: [data-message-author-role="assistant"]
+//       Stop button: STOP_BTN_SELECTOR_llm
+//
+//   extractCleanText_llm(messageEl)
+//       Clone a response DOM node, strip UI chrome (copy buttons, sticky
+//       headers), extract text preserving code block formatting.
+//       Depends on the site's response HTML structure (CodeMirror, markdown
+//       <pre><code>, etc.).
+//
+//   sendMessage_chatgpt(prompt)
+//       Orchestrator: calls insertText → waitForSendButton → click →
+//       waitForAssistantResponse. Returns the cleaned response string.
+//
+//   sendMessage(prompt)
+//       Thin dispatch — calls sendMessage_chatgpt(). To switch providers,
+//       point this at your replacement (e.g. sendMessage_gemini).
+//
+// ── Queue API (site-agnostic, do NOT modify for porting) ────────────────────
+//
+//   submitMessage(prompt, onstart, onend)  — FIFO queue, one job at a time.
+//   flushLlmQueue()                        — drop all pending jobs.
+//   cancelCurrentLlmJob()                  — cancel the in-flight job.
+//
+// ── Lift-and-shift checklist ────────────────────────────────────────────────
+//
+//   1. Copy this file and rewrite the 5 provider functions for the target site.
+//   2. Update src/header.js: change @match to the new site's URL.
+//   3. If the new site has a different CSP policy, check the nonce-based eval
+//      in component_console.js (component_console_eval).
+//   4. Everything else (editor, tabs, clock, calc, console, shell, taskbar,
+//      toast, etc.) works unchanged — they only call submitMessage().
+//
 // -----------------------------------------------------------------------------
 
 const STOP_BTN_SELECTOR_llm = [
@@ -6782,7 +6819,12 @@ async function sendMessage_chatgpt(prompt) {
 }
 
 async function sendMessage(prompt) {
-    return await sendMessage_chatgpt(prompt);
+    const host = location.hostname;
+    if (host.includes("chatgpt.com")) return await sendMessage_chatgpt(prompt);
+    // Future providers:
+    // if (host.includes("build.nvidia.com")) return await sendMessage_nvidia(prompt);
+    console.error("service_llm: no provider for " + host);
+    return null;
 }
 
 // -----------------------------------------------------------------------------

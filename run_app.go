@@ -35,6 +35,7 @@ type appSettings struct {
 	ChromeProfile []string       `json:"chromeprofile"`
 	ChromePort    []int          `json:"chromeport"`
 	App           string         `json:"app"`
+	Website       string         `json:"website"`
 	Properties    map[string]any `json:"properties"`
 }
 
@@ -142,8 +143,21 @@ func run() error {
 	}
 	fmt.Printf("Using slot %d: profile=%q port=%d\n", chosen, profileDir, port)
 
+	// Resolve the target website URL. Required field.
+	website := cfg.Website
+	if website == "" {
+		return fmt.Errorf("appsettings.json: \"website\" is required (e.g. \"https://chatgpt.com\")")
+	}
+	fmt.Printf("Target website: %s\n", website)
+
+	// Extract the hostname for target detection (e.g. "chatgpt.com").
+	websiteHost := website
+	if u, err := url.Parse(website); err == nil && u.Host != "" {
+		websiteHost = u.Host
+	}
+
 	args := []string{
-		"--app=https://chatgpt.com",
+		"--app=" + website,
 		"--start-maximized",
 		fmt.Sprintf("--remote-debugging-port=%d", port),
 		"--remote-allow-origins=*",
@@ -158,11 +172,11 @@ func run() error {
 		return fmt.Errorf("start chrome: %w", err)
 	}
 
-	wsURL, err := waitForChatGPTTarget(port, 30*time.Second)
+	wsURL, err := waitForTarget(port, websiteHost, 30*time.Second)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Found chatgpt.com target: %s\n", wsURL)
+	fmt.Printf("Found %s target: %s\n", websiteHost, wsURL)
 
 	// Give the browser ample time to finish loading chatgpt.com (network,
 	// service workers, hydration) before we start poking it over WebSocket.
@@ -375,9 +389,9 @@ func resolveChromeExe(paths []string) (string, error) {
 	return "", fmt.Errorf("none of the configured chromepath entries exist: %v", paths)
 }
 
-// waitForChatGPTTarget polls http://localhost:<port>/json until a page-type
-// target whose URL contains "chatgpt.com" appears, or the timeout expires.
-func waitForChatGPTTarget(port int, timeout time.Duration) (string, error) {
+// waitForTarget polls http://localhost:<port>/json until a page-type
+// target whose URL contains `host` appears, or the timeout expires.
+func waitForTarget(port int, host string, timeout time.Duration) (string, error) {
 	endpoint := fmt.Sprintf("http://localhost:%d/json", port)
 	deadline := time.Now().Add(timeout)
 	client := &http.Client{Timeout: 3 * time.Second}
@@ -405,16 +419,16 @@ func waitForChatGPTTarget(port int, timeout time.Duration) (string, error) {
 			continue
 		}
 		for _, t := range targets {
-			if t.Type == "page" && strings.Contains(t.URL, "chatgpt.com") && t.WebSocketDebuggerURL != "" {
+			if t.Type == "page" && strings.Contains(t.URL, host) && t.WebSocketDebuggerURL != "" {
 				return t.WebSocketDebuggerURL, nil
 			}
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 	if lastErr != nil {
-		return "", fmt.Errorf("timed out waiting for chatgpt.com target (last error: %v)", lastErr)
+		return "", fmt.Errorf("timed out waiting for %s target (last error: %v)", host, lastErr)
 	}
-	return "", fmt.Errorf("timed out waiting for chatgpt.com target on port %d", port)
+	return "", fmt.Errorf("timed out waiting for %s target on port %d", host, port)
 }
 
 // isPortBindable returns true if we can bind a TCP listener on the given
