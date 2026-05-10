@@ -283,9 +283,8 @@ async function sendMessage_chatgpt(prompt) {
 
 async function sendMessage(prompt) {
     const host = location.hostname;
-    if (host.includes("chatgpt.com")) return await sendMessage_chatgpt(prompt);
-    // Future providers:
-    // if (host.includes("build.nvidia.com")) return await sendMessage_nvidia(prompt);
+    if (host.includes("chatgpt.com"))      return await sendMessage_chatgpt(prompt);
+    if (host.includes("build.nvidia.com")) return await sendMessage_nvidia(prompt);
     console.error("service_llm: no provider for " + host);
     return null;
 }

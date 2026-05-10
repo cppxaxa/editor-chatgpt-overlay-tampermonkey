@@ -5,6 +5,7 @@
 // @description  Floating code editor overlay for chatgpt.com with prompt automation, code review, and tabbed generated views.
 // @author       cppxaxa
 // @match        https://chatgpt.com/*
+// @match        https://build.nvidia.com/*
 // @run-at       document-idle
 // @grant        none
 // ==/UserScript==
