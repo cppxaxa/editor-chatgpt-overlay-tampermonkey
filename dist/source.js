@@ -105,6 +105,8 @@ function framework_init() {
 
     handle_kiosk();
     handle_system_restore();
+
+    window.__tm_loaded = true;
 }
 
 // ===== src/component_calc.js =====

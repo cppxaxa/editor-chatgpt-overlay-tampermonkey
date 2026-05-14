@@ -54,6 +54,10 @@ func main() {
 	}
 }
 
+// errProcessDied is returned by polling functions when the browser process
+// exits before the operation completes.
+var errProcessDied = fmt.Errorf("browser process exited")
+
 func run() error {
 	cfg, err := loadSettings("appsettings.json")
 	if err != nil {
@@ -172,44 +176,108 @@ func run() error {
 		return fmt.Errorf("start chrome: %w", err)
 	}
 
-	wsURL, err := waitForTarget(port, websiteHost, 30*time.Second)
+	// Monitor the browser process — close processDone when it exits so all
+	// polling loops can bail immediately instead of timing out on a dead
+	// process.
+	processDone := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(processDone)
+	}()
+
+	// Quick sanity check: give the process a moment, then verify it's still
+	// alive. Catches immediate-exit failures (bad binary, missing libs, etc.).
+	select {
+	case <-processDone:
+		return fmt.Errorf("browser process exited immediately (exit code: %v)", cmd.ProcessState.ExitCode())
+	case <-time.After(2 * time.Second):
+		// Still running — proceed.
+	}
+
+	// --- Initial injection ---
+	wsURL, err := waitForTarget(port, websiteHost, 60*time.Second, processDone)
 	if err != nil {
 		return err
 	}
 	fmt.Printf("Found %s target: %s\n", websiteHost, wsURL)
 
-	// Give the browser ample time to finish loading chatgpt.com (network,
-	// service workers, hydration) before we start poking it over WebSocket.
-	const preWSDelay = 6 * time.Second
-	fmt.Printf("Waiting %s before connecting to WebSocket...\n", preWSDelay)
-	time.Sleep(preWSDelay)
+	if err := performInjection(wsURL, scriptBytes, cfg.Properties, processDone); err != nil {
+		return err
+	}
 
-	// Wait for chatgpt.com to finish loading before injecting. We poll
-	// document.readyState via Runtime.evaluate until it reports "complete".
-	if err := waitForPageReady(wsURL, 60*time.Second); err != nil {
+	// --- Watchdog loop (best-effort, 1 minute) ---
+	// Stay alive and poll window.__tm_loaded every 5s. If the page navigated
+	// (redirects, SPA transitions) the flag will be gone — re-inject.
+	fmt.Println("Entering watchdog loop (1 minute)...")
+	watchdogEnd := time.Now().Add(1 * time.Minute)
+	id := 6000
+	for time.Now().Before(watchdogEnd) {
+		select {
+		case <-processDone:
+			fmt.Println("Browser process exited — watchdog done.")
+			return nil
+		case <-time.After(5 * time.Second):
+		}
+
+		loaded, err := checkTmLoaded(wsURL, &id)
+		if err != nil {
+			fmt.Printf("  watchdog: CDP check failed: %v\n", err)
+			// Could be a transient WS error or browser closing. If the
+			// process is still alive, try to re-resolve and re-inject.
+			select {
+			case <-processDone:
+				fmt.Println("Browser process exited — watchdog done.")
+				return nil
+			default:
+			}
+		}
+		if loaded {
+			continue
+		}
+
+		// Script is gone — page likely navigated. Re-inject.
+		fmt.Println("  watchdog: window.__tm_loaded is gone — re-injecting...")
+
+		newWsURL, err := waitForTarget(port, websiteHost, 60*time.Second, processDone)
+		if err != nil {
+			fmt.Printf("  watchdog: re-resolve target failed: %v\n", err)
+			continue
+		}
+		wsURL = newWsURL
+
+		if err := performInjection(wsURL, scriptBytes, cfg.Properties, processDone); err != nil {
+			fmt.Printf("  watchdog: re-injection failed: %v\n", err)
+			continue
+		}
+		fmt.Println("  watchdog: re-injection succeeded.")
+	}
+	fmt.Println("Watchdog period elapsed — exiting.")
+	return nil
+}
+
+// performInjection runs the full injection sequence: wait for page ready,
+// ensure booting splash, inject localStorage properties, inject source.js,
+// verify the script initialized, seed src-fs, and remove the splash.
+func performInjection(wsURL string, scriptBytes []byte, props map[string]any, processDone <-chan struct{}) error {
+	// Wait for the page to finish loading.
+	if err := waitForPageReady(wsURL, 60*time.Second, processDone); err != nil {
 		return fmt.Errorf("wait for page ready: %w", err)
 	}
 	fmt.Println("Page reports document.readyState === \"complete\".")
 
-	// Sanity-check the injection channel before sending the real script:
-	// inject a tiny "booting" splash div, then poll the DOM until it is
-	// actually present. If it doesn't show up, retry the injection. This
-	// guards against the rare case where Runtime.evaluate is accepted but
-	// the page hasn't yet attached its document body.
+	// Sanity-check the injection channel: inject a splash div and verify
+	// it appears in the DOM.
 	if err := ensureBootingSplash(wsURL, 30*time.Second); err != nil {
 		return fmt.Errorf("inject booting splash: %w", err)
 	}
 	fmt.Println("Booting splash visible in DOM — proceeding with source.js injection.")
 
-	// Feed every key under appsettings.json "properties" into the page's
-	// localStorage so source.js can read user-configured behaviour. Values are
-	// JSON-stringified — booleans become "true"/"false", strings become bare
-	// strings (no surrounding quotes), objects/arrays become their JSON repr.
-	if err := injectPropertiesIntoLocalStorage(wsURL, cfg.Properties); err != nil {
+	// Inject localStorage properties.
+	if err := injectPropertiesIntoLocalStorage(wsURL, props); err != nil {
 		return fmt.Errorf("inject properties into localStorage: %w", err)
 	}
 
-	// Build the JSON-RPC payload — encoding/json escapes the script body for us.
+	// Inject source.js.
 	payload := map[string]any{
 		"id":     1,
 		"method": "Runtime.evaluate",
@@ -221,7 +289,6 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("marshal payload: %w", err)
 	}
-
 	resp, err := wsSendAndReceive(wsURL, payloadBytes)
 	if err != nil {
 		return fmt.Errorf("websocket exchange: %w", err)
@@ -229,15 +296,18 @@ func run() error {
 	fmt.Println("DevTools response:")
 	fmt.Println(resp)
 
-	// Seed the IndexedDB-backed src-fs store. This must run AFTER source.js
-	// has been injected, because we call window.__tm_seed_fs which is defined
-	// by service_fs.js. Missing src-fs/ is not an error — many builds won't
-	// ship one.
+	// Verify the script actually initialized by polling window.__tm_loaded.
+	if err := verifyScriptLoaded(wsURL, 30*time.Second, processDone); err != nil {
+		return fmt.Errorf("verify script loaded: %w", err)
+	}
+	fmt.Println("Script verified: window.__tm_loaded === true.")
+
+	// Seed the IndexedDB-backed src-fs store.
 	if err := injectSrcFs(wsURL, "src-fs"); err != nil {
 		fmt.Printf("warn: src-fs injection failed: %v\n", err)
 	}
 
-	// Tear down the booting splash now that source.js has been injected.
+	// Tear down the booting splash.
 	removeExpr := `(function(){
         var el = document.getElementById("tm-booting-splash");
         if (el && el.parentNode) { el.parentNode.removeChild(el); return "removed"; }
@@ -250,6 +320,55 @@ func run() error {
 		fmt.Printf("Booting splash removal: %s\n", rmResp)
 	}
 	return nil
+}
+
+// verifyScriptLoaded polls window.__tm_loaded via Runtime.evaluate until it
+// returns true, or the timeout expires. This confirms the injected script
+// actually ran framework_init() to completion (not just that CDP accepted the
+// evaluate call).
+func verifyScriptLoaded(wsURL string, timeout time.Duration, processDone <-chan struct{}) error {
+	deadline := time.Now().Add(timeout)
+	id := 5000
+	for time.Now().Before(deadline) {
+		select {
+		case <-processDone:
+			return errProcessDied
+		default:
+		}
+
+		loaded, err := checkTmLoaded(wsURL, &id)
+		if err != nil {
+			fmt.Printf("  verify: CDP error: %v\n", err)
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+		if loaded {
+			return nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return fmt.Errorf("timed out waiting for window.__tm_loaded === true")
+}
+
+// checkTmLoaded evaluates window.__tm_loaded and returns true if it is
+// strictly true. Returns (false, nil) when the value is absent or falsy,
+// and (false, err) on communication errors.
+func checkTmLoaded(wsURL string, id *int) (bool, error) {
+	respText, err := evaluateExpression(wsURL, id, "(window.__tm_loaded === true).toString()")
+	if err != nil {
+		return false, err
+	}
+	var resp struct {
+		Result struct {
+			Result struct {
+				Value string `json:"value"`
+			} `json:"result"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(respText), &resp); err != nil {
+		return false, fmt.Errorf("parse __tm_loaded response: %w", err)
+	}
+	return resp.Result.Result.Value == "true", nil
 }
 
 // injectSrcFs walks `dir` recursively, base64-encodes every file, and sends
@@ -390,14 +509,21 @@ func resolveChromeExe(paths []string) (string, error) {
 }
 
 // waitForTarget polls http://localhost:<port>/json until a page-type
-// target whose URL contains `host` appears, or the timeout expires.
-func waitForTarget(port int, host string, timeout time.Duration) (string, error) {
+// target whose URL contains `host` appears, the timeout expires, or the
+// browser process exits (processDone closes).
+func waitForTarget(port int, host string, timeout time.Duration, processDone <-chan struct{}) (string, error) {
 	endpoint := fmt.Sprintf("http://localhost:%d/json", port)
 	deadline := time.Now().Add(timeout)
 	client := &http.Client{Timeout: 3 * time.Second}
 
 	var lastErr error
 	for time.Now().Before(deadline) {
+		select {
+		case <-processDone:
+			return "", errProcessDied
+		default:
+		}
+
 		resp, err := client.Get(endpoint)
 		if err != nil {
 			lastErr = err
@@ -627,14 +753,18 @@ func evaluateExpression(wsURL string, id *int, expression string) (string, error
 
 // waitForPageReady polls document.readyState via Runtime.evaluate over a
 // fresh WebSocket connection until it reports "complete", or the timeout
-// expires. Each evaluation uses its own connection — DevTools is happy to
-// accept many short-lived sessions, and this keeps the main injection
-// connection clean.
-func waitForPageReady(wsURL string, timeout time.Duration) error {
+// expires. Bails immediately if processDone closes (browser exited).
+func waitForPageReady(wsURL string, timeout time.Duration, processDone <-chan struct{}) error {
 	deadline := time.Now().Add(timeout)
 	id := 1
 	var lastErr error
 	for time.Now().Before(deadline) {
+		select {
+		case <-processDone:
+			return errProcessDied
+		default:
+		}
+
 		payload := map[string]any{
 			"id":     id,
 			"method": "Runtime.evaluate",
