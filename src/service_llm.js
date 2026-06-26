@@ -283,7 +283,7 @@ async function sendMessage_chatgpt(prompt) {
 
 async function sendMessage(prompt) {
     const host = location.hostname;
-    if (host.includes("chatgpt.com"))      return await sendMessage_chatgpt(prompt);
+    if (host.includes("chatgpt.com"))      return await sendMessage_browsergpt(prompt);
     if (host.includes("build.nvidia.com")) return await sendMessage_nvidia(prompt);
     console.error("service_llm: no provider for " + host);
     return null;
@@ -382,6 +382,7 @@ async function _llm_drain_queue() {
 // -----------------------------------------------------------------------------
 function cancelCurrentLlmJob() {
     if (_llm_currentJob) _llm_currentJob.cancelled = true;
+    if (typeof _browsergpt_cancel === "function") _browsergpt_cancel();
 }
 
 // -----------------------------------------------------------------------------

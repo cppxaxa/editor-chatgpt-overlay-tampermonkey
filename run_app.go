@@ -323,6 +323,7 @@ func performInjection(wsURL string, scriptBytes []byte, props map[string]any, pr
 }
 
 // verifyScriptLoaded polls window.__tm_loaded via Runtime.evaluate until it
+// verifyScriptLoaded polls window.__tm_loaded via Runtime.evaluate until it
 // returns true, or the timeout expires. This confirms the injected script
 // actually ran framework_init() to completion (not just that CDP accepted the
 // evaluate call).

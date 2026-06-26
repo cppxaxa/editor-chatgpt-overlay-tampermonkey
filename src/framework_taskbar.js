@@ -972,8 +972,17 @@ function _framework_taskbar_on_show(sw) {
         }
         if (sw.mode === "minimized") {
             framework_taskbar_restore_window(sw);
+        } else if (ServiceWindow.activeWindow() !== sw) {
+            sw._markActive();
         } else {
             framework_taskbar_minimize_window(sw);
+        }
+    };
+
+    btn.ondblclick = () => {
+        if (sw.visible && sw.mode !== "minimized") {
+            framework_windowmanager_ensure_in_viewport(sw);
+            sw._markActive();
         }
     };
 
@@ -1486,6 +1495,10 @@ function _framework_taskbar_open_options_menu() {
                 else    framework_taskbar_show_shell();
             }
         })
+        .addItem({
+            label: "Clear all app state…",
+            onClick: () => _framework_confirm_clear_state()
+        })
         .openAt(p.x, p.y);
 }
 
@@ -1568,4 +1581,81 @@ function _framework_taskbar_show_restore_btn() {
 
 function _framework_taskbar_hide_restore_btn() {
     if (_taskbar_restore_btn) _taskbar_restore_btn.style.display = "none";
+}
+
+/* ---- Clear all app state ---- */
+
+function _framework_confirm_clear_state() {
+
+    const existing = document.getElementById("tm-clear-state-dialog");
+    if (existing) existing.remove();
+
+    const overlay = document.createElement("div");
+    overlay.id = "tm-clear-state-dialog";
+    Object.assign(overlay.style, {
+        position: "fixed", inset: "0",
+        background: "rgba(0,0,0,.55)", zIndex: "9999999",
+        display: "flex", alignItems: "center", justifyContent: "center"
+    });
+
+    const dialog = document.createElement("div");
+    Object.assign(dialog.style, {
+        background: "#1e1e1e", color: "#d0d0d0",
+        border: "1px solid #444", borderRadius: "10px",
+        padding: "20px 24px", maxWidth: "420px", width: "90%",
+        fontFamily: "monospace", fontSize: "13px",
+        boxShadow: "0 12px 40px rgba(0,0,0,.6)"
+    });
+
+    const title = document.createElement("div");
+    Object.assign(title.style, { fontWeight: "bold", fontSize: "15px", marginBottom: "12px", color: "#e0e0e0" });
+    title.textContent = "Clear all app state";
+
+    const msg = document.createElement("div");
+    msg.style.marginBottom = "16px";
+    msg.textContent = "This will remove all saved window positions, editor content, tab caches, console history, and component state. File system contents are preserved. The page will reload. Continue?";
+
+    const btnRow = document.createElement("div");
+    Object.assign(btnRow.style, { display: "flex", gap: "10px", justifyContent: "flex-end" });
+
+    const cancelBtn = document.createElement("button");
+    Object.assign(cancelBtn.style, {
+        padding: "6px 16px", border: "1px solid #555", borderRadius: "6px",
+        background: "#333", color: "#ddd", cursor: "pointer", fontSize: "13px"
+    });
+    cancelBtn.textContent = "Cancel";
+    cancelBtn.onclick = () => overlay.remove();
+
+    const clearBtn = document.createElement("button");
+    Object.assign(clearBtn.style, {
+        padding: "6px 16px", border: "1px solid #c62828", borderRadius: "6px",
+        background: "#c62828", color: "#fff", cursor: "pointer", fontSize: "13px", fontWeight: "bold"
+    });
+    clearBtn.textContent = "Clear & Reload";
+    clearBtn.onclick = () => {
+        framework_clear_app_state();
+        location.reload();
+    };
+
+    btnRow.appendChild(cancelBtn);
+    btnRow.appendChild(clearBtn);
+    dialog.appendChild(title);
+    dialog.appendChild(msg);
+    dialog.appendChild(btnRow);
+    overlay.appendChild(dialog);
+    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+    document.body.appendChild(overlay);
+}
+
+/** Remove all tm_* localStorage keys (component/service state).
+ *  Preserves non-tm_ keys (kiosk, system_restore, etc.) and
+ *  IndexedDB (service_fs file contents). */
+function framework_clear_app_state() {
+    const keysToRemove = [];
+    for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith("tm_")) keysToRemove.push(key);
+    }
+    keysToRemove.forEach(k => localStorage.removeItem(k));
+    console.log("framework_clear_app_state: removed " + keysToRemove.length + " key(s).");
 }

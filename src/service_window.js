@@ -1169,6 +1169,26 @@ class ServiceWindow {
    call preventDefault() and keep the page from scrolling under the finger
    while the title bar is being dragged. */
 
+/* ---- Iframe pointer-event suppression during drag/resize ---- */
+/* Iframes capture mousemove events, breaking drag/resize on the parent
+   document. During any drag or resize operation we disable pointer events
+   on ALL iframes so the parent's mousemove handler sees every event. */
+
+function _sw_disable_iframes() {
+    document.querySelectorAll("iframe").forEach(f => {
+        f._sw_saved_pe = f.style.pointerEvents;
+        f.style.pointerEvents = "none";
+    });
+}
+function _sw_enable_iframes() {
+    document.querySelectorAll("iframe").forEach(f => {
+        f.style.pointerEvents = f._sw_saved_pe || "";
+        delete f._sw_saved_pe;
+    });
+}
+
+/* ---- Dragging ---- */
+
 function service_window_make_draggable(element, handle, opts) {
 
     const isDraggable = (opts && opts.isDraggable) || (() => true);
@@ -1198,12 +1218,15 @@ function service_window_make_draggable(element, handle, opts) {
 
     /* Mouse */
     handle.addEventListener("mousedown", (e) => {
-        start(e.clientX, e.clientY);
+        if (start(e.clientX, e.clientY)) _sw_disable_iframes();
     });
     document.addEventListener("mousemove", (e) => {
         move(e.clientX, e.clientY);
     });
-    document.addEventListener("mouseup", end);
+    document.addEventListener("mouseup", () => {
+        _sw_enable_iframes();
+        end();
+    });
 
     /* Touch — touchstart and touchmove are non-passive so preventDefault
        can suppress the page-level scroll/pan that would otherwise eat the
@@ -1219,7 +1242,7 @@ function service_window_make_draggable(element, handle, opts) {
         if (e.target && e.target.closest && e.target.closest("button")) return;
         const t = e.touches && e.touches[0];
         if (!t) return;
-        if (start(t.clientX, t.clientY)) e.preventDefault();
+        if (start(t.clientX, t.clientY)) { _sw_disable_iframes(); e.preventDefault(); }
     }, { passive: false });
 
     document.addEventListener("touchmove", (e) => {
@@ -1230,8 +1253,8 @@ function service_window_make_draggable(element, handle, opts) {
         e.preventDefault();
     }, { passive: false });
 
-    document.addEventListener("touchend",    end);
-    document.addEventListener("touchcancel", end);
+    document.addEventListener("touchend",    () => { _sw_enable_iframes(); end(); });
+    document.addEventListener("touchcancel", () => { _sw_enable_iframes(); end(); });
 }
 
 /* ---- Resize handle ---- */
@@ -1266,6 +1289,7 @@ function service_window_create_resize_handle(container, opts) {
         startY = e.clientY;
         startWidth  = container.offsetWidth;
         startHeight = container.offsetHeight;
+        _sw_disable_iframes();
         e.preventDefault();
     });
 
@@ -1278,7 +1302,7 @@ function service_window_create_resize_handle(container, opts) {
     });
 
     document.addEventListener("mouseup", () => {
-        if (resizing) onResizeEnd();
+        if (resizing) { _sw_enable_iframes(); onResizeEnd(); }
         resizing = false;
     });
 

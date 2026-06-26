@@ -23,6 +23,18 @@
 
 function shell_toast_build() {
     return {
+        help() {
+            return "shell.shelltoast — Toast notifications\n\n" +
+                "Methods:\n" +
+                "  showToastSimple(message)           — Show a 3-second toast.\n" +
+                "  showToast(message, opts?)           — Full options: {duration, title, icon}.\n" +
+                "                                       Returns {dismiss} to early-dismiss.\n" +
+                "  clearHistory()                      — Wipe the notifications history.\n\n" +
+                "Recipes:\n" +
+                "  shell.shelltoast.showToastSimple('Hello!')\n" +
+                "  var t = shell.shelltoast.showToast('Done', {duration: 5000, title: 'Task'})\n" +
+                "  t.dismiss()  // early dismiss";
+        },
         showToastSimple(message) {
             return service_toast_show(String(message == null ? "" : message));
         },

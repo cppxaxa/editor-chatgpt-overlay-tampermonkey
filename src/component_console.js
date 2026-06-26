@@ -608,9 +608,16 @@ function _component_console_ai_submit(userText) {
         '```json\n{"commands": ["cmd1", "cmd2"], "isFinal": true}\n```\n\n' +
         "Rules:\n" +
         "- commands: array of JavaScript expressions to eval in the browser console.\n" +
+        "- CRITICAL VARIABLE RULE: Each command runs in its own fresh scope. Variables (const/let/var) " +
+        "declared in one command DO NOT EXIST in subsequent commands. NEVER declare variables.\n" +
+        "  BAD:  {\"commands\": [\"const id = shell.browser.newTab('https://x.com','X')\", \"shell.sessionConsole.getTabById(1).attachToBrowserTab(id)\"]}\n" +
+        "  GOOD: {\"commands\": [\"shell.browser.newTab('https://x.com','X')\"], \"isFinal\": false}  → read output (e.g. 42) → " +
+        "{\"commands\": [\"shell.sessionConsole.getTabById(1).attachToBrowserTab(42)\"], \"isFinal\": true}\n" +
+        "  ALSO GOOD: nested calls — shell.sessionConsole.getTabById(shell.sessionConsole.newTab('X')).attachToBrowserTab(shell.browser.newTab('https://x.com','X'))\n" +
         "- isFinal: true if the task is done after these commands. false if you need to see the output to decide next steps.\n" +
         "- Do NOT use semicolons at the end of statements.\n" +
         "- Use console.log() for output the user should see.\n" +
+        "- NEVER put multiple statements separated by newlines in a single command string.\n" +
         "\nStrict command syntax rules:\n" +
         "- Every entry in commands MUST be valid standalone JavaScript when eval'd.\n" +
         "- Before responding, mentally verify that every command parses as valid JS independently.\n" +
@@ -621,6 +628,8 @@ function _component_console_ai_submit(userText) {
         "- Do NOT produce commands that would be a syntax error in isolation (e.g. dangling brackets, unclosed strings).\n" +
         "- Each command is eval'd separately — do NOT split a single statement across multiple commands.\n" +
         "\nShell & discovery:\n" +
+        "- CRITICAL: Before using any shell namespace, call its help() method first (e.g. shell.browser.help(), " +
+        "shell.sessionConsole.help()) to learn available methods and recipes. Call shell.help() for an overview of all namespaces.\n" +
         "- CRITICAL: If you do not know the exact signature of a function (e.g. addAlarm(), addTimer(), setTime()), " +
         "you MUST inspect it first with console.dir(<fn>) before invoking it. " +
         "All functions, if not used with the correct arguments, can produce unintended or disastrous side effects. " +
@@ -636,6 +645,15 @@ function _component_console_ai_submit(userText) {
         "causes that app to build its namespace on shell — new keys and sub-objects appear that did not exist before the launch. " +
         "Similarly, mutating state (e.g. addAlarm(), addTimer()) creates new sub-objects (shell.clock.alarm1, shell.clock.timer1). " +
         "After launching an app or mutating state, always re-inspect with console.dir() to discover the newly available API.\n" +
+        "\nBrowser + Session Console workflow:\n" +
+        "- To execute JS on a webpage, follow these steps:\n" +
+        "  1. shell.browser.newTab('https://example.com', 'My Tab') → returns a browser tab ID (number)\n" +
+        "  2. shell.sessionConsole.newTab('My Session') → returns a session console tab ID (number)\n" +
+        "  3. Find the browser tab ID: shell.browser.listTabs() → [{id, name, url}]\n" +
+        "  4. Attach: shell.sessionConsole.getTabById(<consoleTabId>).attachToBrowserTab(<browserTabId>)\n" +
+        "  5. Now shell.sessionConsole.submit(<consoleTabId>, 'document.title') executes inside that page's iframe\n" +
+        "- To attach to an existing browser tab, use shell.browser.listTabs() to find its ID first.\n" +
+        "- After attaching, all submit() calls on that console tab run inside the browser tab's iframe DOM.\n" +
         "- Maximum " + _CONSOLE_AI_MAX_TURNS + " turns allowed.\n";
 
     var conversation = [

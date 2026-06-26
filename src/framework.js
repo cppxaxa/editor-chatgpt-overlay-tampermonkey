@@ -24,6 +24,16 @@ function framework_register_launcher() {
         icon:    "🗂️",
         title:   "Local Storage"
     });
+    framework_launcher_register("Browser", component_browser_launch, {
+        appName: "browser",
+        icon:    "🌐",
+        title:   "Browser"
+    });
+    framework_launcher_register("Session Console", component_session_console_launch, {
+        appName: "session_console",
+        icon:    "💻",
+        title:   "Session Console"
+    });
 
     framework_on_launcher_registered();
 }
@@ -55,6 +65,8 @@ function framework_on_init() {
     component_chat_handle_init();
     component_clock_handle_init();
     component_localstorage_handle_init();
+    component_browser_handle_init();
+    component_session_console_handle_init();
     service_toast_handle_init();
 }
 

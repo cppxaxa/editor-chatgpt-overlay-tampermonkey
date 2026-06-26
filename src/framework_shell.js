@@ -30,6 +30,15 @@ function _framework_shell_make_launcher_proxy() {
     return new Proxy(Object.create(null), {
         get(_target, prop) {
             if (typeof prop !== "string") return undefined;
+            if (prop === "help") {
+                return () => "shell.launcher — Start-menu app launcher\n\n" +
+                    "Methods:\n" +
+                    "  shell.launcher.<appName>()  — Launch an app by name.\n" +
+                    "  shell.launcher.list()       — Array of registered app names.\n\n" +
+                    "Recipe:\n" +
+                    "  shell.launcher.list()       // discover apps\n" +
+                    "  shell.launcher.browser()    // launch browser";
+            }
             if (prop === "list") {
                 return () => framework_taskbar_list_apps()
                     .filter(a => a.appName)
@@ -65,6 +74,17 @@ function _framework_shell_make_tray_proxy() {
     return new Proxy(Object.create(null), {
         get(_target, prop) {
             if (typeof prop !== "string") return undefined;
+            if (prop === "help") {
+                return () => "shell.tray — System tray apps\n\n" +
+                    "Methods:\n" +
+                    "  shell.tray.<appName>()      — Toggle a tray app.\n" +
+                    "  shell.tray.<appName>.show()  — Force-show the tray icon.\n" +
+                    "  shell.tray.<appName>.hide()  — Force-hide the tray icon.\n" +
+                    "  shell.tray.list()            — Array of registered tray app names.\n\n" +
+                    "Recipe:\n" +
+                    "  shell.tray.list()            // discover tray apps\n" +
+                    "  shell.tray.console()         // toggle tray console";
+            }
             if (prop === "list") {
                 return () => framework_taskbar_list_tray_apps().map(a => a.appName);
             }
@@ -110,17 +130,38 @@ function framework_shell_init() {
 
     window.shell = {
         __tm_framework_shell: true,
+
+        help() {
+            return "shell — Top-level scripting facade\n\n" +
+                "Namespaces:\n" +
+                "  shell.browser          — Browser tab management. shell.browser.help()\n" +
+                "  shell.sessionConsole   — JS console with browser binding. shell.sessionConsole.help()\n" +
+                "  shell.clock            — Clock, alarms, timers, stopwatch. shell.clock.help()\n" +
+                "  shell.shelltoast       — Toast notifications. shell.shelltoast.help()\n" +
+                "  shell.launcher         — Start-menu app launcher. shell.launcher.help()\n" +
+                "  shell.tray             — System tray apps. shell.tray.help()\n" +
+                "  shell.startMenu        — Start menu controls. shell.startMenu.help()\n" +
+                "  shell.shellVisibility  — Desktop shell visibility. shell.shellVisibility.help()\n\n" +
+                "Methods:\n" +
+                "  shell.list()           — {launcher: [...], tray: [...]}\n\n" +
+                "Tip: Call help() on any namespace to see its methods and recipes.";
+        },
+
         launcher:   _framework_shell_make_launcher_proxy(),
         tray:       _framework_shell_make_tray_proxy(),
         shelltoast: shell_toast_build(),
+        browser:    _browser_build_shell_api(),
+        sessionConsole: _sc_build_shell_api(),
 
         startMenu: {
+            help()   { return "shell.startMenu — Start menu controls\n\nMethods:\n  open() / close() / toggle()"; },
             open()   { framework_taskbar_toggle_start_menu(); },
             close()  { framework_taskbar_close_start_menu(); },
             toggle() { framework_taskbar_toggle_start_menu(); }
         },
 
         shellVisibility: {
+            help()     { return "shell.shellVisibility — Desktop shell visibility\n\nMethods:\n  show() / hide() / isHidden()"; },
             show()     { framework_taskbar_show_shell(); },
             hide()     { framework_taskbar_hide_shell(); },
             isHidden() { return framework_taskbar_is_hidden(); }

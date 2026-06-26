@@ -769,6 +769,31 @@ function _clock_rebuild_shell() {
 
     var ns = {};
 
+    ns.help = function () {
+        return "shell.clock — Clock, alarms, timers, stopwatch\n\n" +
+            "Methods:\n" +
+            "  show() / hide() / isVisible()    — Window controls.\n" +
+            "  addAlarm()                        — Add a new alarm.\n" +
+            "  removeAlarm('alarm1')             — Remove alarm by name.\n" +
+            "  addTimer()                        — Add a new countdown timer.\n" +
+            "  removeTimer('timer1')             — Remove timer by name.\n" +
+            "  startStopwatch() / stopStopwatch() / resetStopwatch() / lapStopwatch()\n" +
+            "  getStopwatchElapsed()             — Elapsed ms.\n\n" +
+            "Dynamic sub-objects (after adding):\n" +
+            "  shell.clock.alarm1.setTime('14:30')\n" +
+            "  shell.clock.alarm1.setMessage('Meeting')\n" +
+            "  shell.clock.alarm1.setEnabled(true)\n" +
+            "  shell.clock.timer1.setMinutes(5)\n" +
+            "  shell.clock.timer1.start() / pause() / reset()\n" +
+            "  shell.clock.timer1.getRemaining()  — remaining ms\n\n" +
+            "Recipes:\n" +
+            "  // Set a 5-minute timer:\n" +
+            "  shell.clock.addTimer()\n" +
+            "  // Then inspect: console.dir(shell.clock) to find timer1\n" +
+            "  shell.clock.timer1.setMinutes(5)\n" +
+            "  shell.clock.timer1.start()";
+    };
+
     // Window controls
     ns.show      = function () { component_clock_launch(); };
     ns.hide      = function () { if (clockServiceWindow) clockServiceWindow.hide(); };
