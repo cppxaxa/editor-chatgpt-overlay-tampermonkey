@@ -610,9 +610,12 @@ async function _browser_eval_in_tab(tabId, js) {
                 win.eval(thenScript);
             }
 
-            /* Poll for the result — 150ms interval, up to 3 minutes */
+            /* Poll for the result — 150ms interval, up to 6 minutes.
+               The browsergpt automation can legitimately wait through a long
+               generation (its own internal ceiling is ~5min); keep this
+               above that so a slow-but-valid response isn't cut short. */
             const pollMs  = 150;
-            const maxWait = 180000;
+            const maxWait = 360000;
             const t0 = Date.now();
 
             while (Date.now() - t0 < maxWait) {

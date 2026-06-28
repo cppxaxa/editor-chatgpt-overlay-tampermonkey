@@ -734,9 +734,12 @@ async function _browser_eval_in_tab(tabId, js) {
                 win.eval(thenScript);
             }
 
-            /* Poll for the result — 150ms interval, up to 3 minutes */
+            /* Poll for the result — 150ms interval, up to 6 minutes.
+               The browsergpt automation can legitimately wait through a long
+               generation (its own internal ceiling is ~5min); keep this
+               above that so a slow-but-valid response isn't cut short. */
             const pollMs  = 150;
-            const maxWait = 180000;
+            const maxWait = 360000;
             const t0 = Date.now();
 
             while (Date.now() - t0 < maxWait) {
@@ -8978,11 +8981,22 @@ async function sendMessage_browsergpt(prompt) {
     /* Inject and run the full automation as a single async IIFE inside
        the iframe. This avoids repeated eval round-trips for each step. */
     const escapedPrompt = JSON.stringify(prompt);
+    /* Selectors derived from the live ChatGPT DOM (verified against a capture
+       taken mid-stream):
+         - Streaming flag: the composer submit button carries
+           data-testid="stop-button" (aria-label="Stop answering") while
+           answering, and reverts to data-testid="send-button" when done — so
+           its ABSENCE reliably means "not streaming". The old
+           "Stop streaming"/"Stop generating"/"Stop" labels match nothing.
+         - Done flag: the per-turn action bar (Copy / Good / Bad response)
+           renders only AFTER a turn finishes. A new copy-turn-action-button
+           is therefore a definitive, markup-stable completion signal. */
     const stopSelectors = JSON.stringify(
-        'button[data-testid="stop-button"],' +
-        'button[aria-label="Stop streaming"],' +
-        'button[aria-label="Stop generating"],' +
-        'button[aria-label="Stop"]'
+        '[data-testid="stop-button"],' +
+        'button[aria-label="Stop answering"]'
+    );
+    const doneSelectors = JSON.stringify(
+        '[data-testid="copy-turn-action-button"]'
     );
 
     const script = `(async function() {
@@ -9010,8 +9024,11 @@ async function sendMessage_browsergpt(prompt) {
         }
         if (!sendBtn) return { error: "send button not found" };
 
-        /* 3. Count existing responses, then click send */
+        /* 3. Snapshot current assistant-message count and per-turn copy-button
+           count, then click send. The copy button for the NEW turn appears
+           only on completion, so a later increase is our "done" signal. */
         var prevCount = document.querySelectorAll('[data-message-author-role="assistant"]').length;
+        var prevCopy  = document.querySelectorAll(${doneSelectors}).length;
         sendBtn.click();
 
         /* 4. Wait for new assistant message to appear */
@@ -9022,14 +9039,43 @@ async function sendMessage_browsergpt(prompt) {
             await sleep(500);
         }
 
-        /* 5. Wait for streaming to finish (stop button disappears) */
-        for (var k = 0; k < 240; k++) {   // up to 120s
+        /* 5a. Wait for generation to actually START so the pre-stream gap
+           isn't mistaken for completion. Bounded — a very fast reply might
+           finish before we observe the stop button, so we don't hard-fail on
+           timeout, and we also bail early if the turn is already done. */
+        for (var s = 0; s < 40; s++) {     // up to 8s
             if (cancelled()) return { cancelled: true };
-            var stopBtn = document.querySelector(${stopSelectors});
-            if (!stopBtn) break;
+            if (document.querySelector(${stopSelectors})) break;
+            if (document.querySelectorAll(${doneSelectors}).length > prevCopy) break;
+            await sleep(200);
+        }
+
+        /* 5b. Wait for generation to FINISH. Signals in priority order:
+             - DONE: a new per-turn action bar appeared (copy-button count
+               grew). ChatGPT renders Copy/Good/Bad only after a turn
+               completes — the authoritative, markup-stable signal.
+             - DONE: stop button gone AND the latest assistant text has been
+               stable for ~1.5s (3 ticks).
+             - FALLBACK: text stable for ~4s (8 ticks) regardless, in case
+               both signals drift after a future ChatGPT UI change. */
+        var lastLen = -1, stableTicks = 0;
+        for (var k = 0; k < 480; k++) {    // up to 240s hard cap
+            if (cancelled()) return { cancelled: true };
+
+            var doneNow   = document.querySelectorAll(${doneSelectors}).length > prevCopy;
+            var streaming = !!document.querySelector(${stopSelectors});
+            var msgsNow   = document.querySelectorAll('[data-message-author-role="assistant"]');
+            var curEl     = msgsNow[msgsNow.length - 1];
+            var len       = curEl ? curEl.textContent.length : 0;
+
+            if (len > 0 && len === lastLen) stableTicks++; else { stableTicks = 0; lastLen = len; }
+
+            if (doneNow && len > 0) break;               // turn action bar rendered = done
+            if (!streaming && stableTicks >= 3) break;   // stream ended + settled
+            if (stableTicks >= 8) break;                 // settled long enough (fallback)
             await sleep(500);
         }
-        await sleep(500);  // settle
+        await sleep(400);  // final settle
 
         /* 6. Extract final response text — strip code-block chrome
            (language labels, copy buttons, sticky headers) that innerText
