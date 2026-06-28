@@ -95,6 +95,7 @@ class ServiceWindow {
         this.headerEl = document.createElement("div");
         Object.assign(this.headerEl.style, {
             height: "36px",
+            flexShrink: "0",
             background: "#2a2a2a",
             color: "white",
             display: "flex",
