@@ -5840,32 +5840,38 @@ function createEditor() {
             exitMaximizedColumnLayout();
         }
 
-        editorServiceWindow.defaultMinimize();
-
-        if (editorServiceWindow.mode === "minimized") {
-            textarea.style.display      = "none";
-            columnContainer.style.display = "none";
-            asciiTA.style.display       = "none";
-            questionTA.style.display    = "none";
-            snippetsTA.style.display    = "none";
-            spreviewFrame.style.display = "none";
+        if (wasMinimized) {
+            /* Restoring — instant, no animation. Show content in the callback. */
+            editorServiceWindow.defaultMinimize(() => {
+                if (activeTab === "ascii") {
+                    asciiTA.style.display = "block"; asciiTA.focus();
+                } else if (activeTab === "question") {
+                    questionTA.style.display = "block"; questionTA.focus();
+                } else if (activeTab === "snippets") {
+                    snippetsTA.style.display = "block"; snippetsTA.focus();
+                } else if (activeTab === "spreview") {
+                    spreviewFrame.style.display = "block";
+                } else {
+                    textarea.style.display = "block";
+                    textarea.focus();
+                    if (editorServiceWindow.mode === "normal" && activeTab === "editor") {
+                        redistributeColumns();
+                    }
+                }
+                saveEditorState();
+            });
+        } else {
+            /* Minimizing — hide content after the collapse animation finishes. */
+            editorServiceWindow.defaultMinimize(() => {
+                textarea.style.display        = "none";
+                columnContainer.style.display = "none";
+                asciiTA.style.display         = "none";
+                questionTA.style.display      = "none";
+                snippetsTA.style.display      = "none";
+                spreviewFrame.style.display   = "none";
+                saveEditorState();
+            });
         }
-        else {
-            /* Restoring from minimized — show the active tab's content. */
-            if (activeTab === "ascii") {
-                asciiTA.style.display = "block"; asciiTA.focus();
-            } else if (activeTab === "question") {
-                questionTA.style.display = "block"; questionTA.focus();
-            } else if (activeTab === "snippets") {
-                snippetsTA.style.display = "block"; snippetsTA.focus();
-            } else if (activeTab === "spreview") {
-                spreviewFrame.style.display = "block";
-            } else {
-                textarea.style.display = "block";
-            }
-        }
-
-        saveEditorState();
     };
 
     maxBtn.onclick = () => {
@@ -10547,6 +10553,7 @@ class ServiceWindow {
         this._activeTabId    = null;
         this._lastActiveAt   = 0;    // timestamp set on each _markActive call
         this._shell          = null; // shell object for programmatic API
+        this._minAnimTimer   = null; // in-flight minimize/restore animation timer
     }
 
     /* Build container + header + min/max/close + drag wiring + resize handle.
@@ -11256,7 +11263,7 @@ class ServiceWindow {
         this.persistState();
     }
 
-    defaultMinimize() {
+    defaultMinimize(done) {
 
         if (!this.container) return;
 
@@ -11269,27 +11276,74 @@ class ServiceWindow {
                 height: this.container.style.height
             };
 
-            this.container.style.height = "36px";
             if (this.resizeHandle) this.resizeHandle.style.display = "none";
             this.mode = "minimized";
+            ServiceWindow._repaintBorders();
+
+            this._playHeightAnim("36px", () => {
+                this.persistState();
+                if (done) done();
+            });
         }
         else {
+
+            const targetHeight = this.previousBounds ? this.previousBounds.height : "350px";
 
             if (this.previousBounds) {
                 this.container.style.left   = this.previousBounds.left;
                 this.container.style.top    = this.previousBounds.top;
                 this.container.style.width  = this.previousBounds.width;
-                this.container.style.height = this.previousBounds.height;
-            } else {
-                this.container.style.height = "350px";
             }
 
+            this.container.style.height = targetHeight;
             if (this.resizeHandle) this.resizeHandle.style.display = "block";
             this.mode = "normal";
+            ServiceWindow._repaintBorders();
+            this.persistState();
+            if (done) done();
+        }
+    }
+
+    /* Animate container height to targetHeight over 150ms.
+       Lock in the current height synchronously, then use a rAF + forced
+       reflow (void offsetHeight) to ensure the browser commits the "from"
+       state before the transition starts — same approach as _playOpenAnim.
+       Cancels any in-flight height animation before starting. */
+    _playHeightAnim(targetHeight, done) {
+
+        if (this._minAnimTimer) {
+            clearTimeout(this._minAnimTimer);
+            this._minAnimTimer = null;
+            if (this.container) this.container.style.transition = "";
         }
 
-        ServiceWindow._repaintBorders();
-        this.persistState();
+        if (!this.container || ServiceWindow._reducedMotion()) {
+            if (this.container) this.container.style.height = targetHeight;
+            if (done) done();
+            return;
+        }
+
+        const dur = 150;
+        const c   = this.container;
+
+        /* Lock in current height and clear any stale transition synchronously
+           so the browser has a clean "from" state before the rAF fires. */
+        const fromHeight = c.style.height || (c.offsetHeight + "px");
+        c.style.transition = "none";
+        c.style.height     = fromHeight;
+
+        requestAnimationFrame(() => {
+            if (!c) return;
+            void c.offsetHeight;   // force layout flush — commits fromHeight
+            c.style.transition = "height " + dur + "ms ease";
+            c.style.height     = targetHeight;
+
+            this._minAnimTimer = setTimeout(() => {
+                this._minAnimTimer = null;
+                if (this.container) this.container.style.transition = "";
+                if (done) done();
+            }, dur + 10);
+        });
     }
 
     /* ---- State persistence ----

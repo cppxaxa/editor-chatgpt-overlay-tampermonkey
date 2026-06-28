@@ -342,32 +342,38 @@ function createEditor() {
             exitMaximizedColumnLayout();
         }
 
-        editorServiceWindow.defaultMinimize();
-
-        if (editorServiceWindow.mode === "minimized") {
-            textarea.style.display      = "none";
-            columnContainer.style.display = "none";
-            asciiTA.style.display       = "none";
-            questionTA.style.display    = "none";
-            snippetsTA.style.display    = "none";
-            spreviewFrame.style.display = "none";
+        if (wasMinimized) {
+            /* Restoring — instant, no animation. Show content in the callback. */
+            editorServiceWindow.defaultMinimize(() => {
+                if (activeTab === "ascii") {
+                    asciiTA.style.display = "block"; asciiTA.focus();
+                } else if (activeTab === "question") {
+                    questionTA.style.display = "block"; questionTA.focus();
+                } else if (activeTab === "snippets") {
+                    snippetsTA.style.display = "block"; snippetsTA.focus();
+                } else if (activeTab === "spreview") {
+                    spreviewFrame.style.display = "block";
+                } else {
+                    textarea.style.display = "block";
+                    textarea.focus();
+                    if (editorServiceWindow.mode === "normal" && activeTab === "editor") {
+                        redistributeColumns();
+                    }
+                }
+                saveEditorState();
+            });
+        } else {
+            /* Minimizing — hide content after the collapse animation finishes. */
+            editorServiceWindow.defaultMinimize(() => {
+                textarea.style.display        = "none";
+                columnContainer.style.display = "none";
+                asciiTA.style.display         = "none";
+                questionTA.style.display      = "none";
+                snippetsTA.style.display      = "none";
+                spreviewFrame.style.display   = "none";
+                saveEditorState();
+            });
         }
-        else {
-            /* Restoring from minimized — show the active tab's content. */
-            if (activeTab === "ascii") {
-                asciiTA.style.display = "block"; asciiTA.focus();
-            } else if (activeTab === "question") {
-                questionTA.style.display = "block"; questionTA.focus();
-            } else if (activeTab === "snippets") {
-                snippetsTA.style.display = "block"; snippetsTA.focus();
-            } else if (activeTab === "spreview") {
-                spreviewFrame.style.display = "block";
-            } else {
-                textarea.style.display = "block";
-            }
-        }
-
-        saveEditorState();
     };
 
     maxBtn.onclick = () => {
